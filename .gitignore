@@ -1,0 +1,13 @@
+# 运行期产物，不入库
+data/
+logs/
+examples/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 密钥，绝不入库
+.env
+.env.*
+*.key
