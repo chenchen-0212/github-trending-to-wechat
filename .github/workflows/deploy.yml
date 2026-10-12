@@ -1,0 +1,31 @@
+name: Deploy to ECS
+
+# 监听 main 分支的提交，推送到阿里云 ECS 的部署目录。
+# 远端跑的是 crontab 每日 09:00 执行 run_daily.py，代码更新后下次触发自动生效，无需重启。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # 也支持手动触发
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 准备 SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.ECS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.ECS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 在 ECS 上拉取最新代码
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes \
+              "${{ secrets.ECS_USER }}@${{ secrets.ECS_HOST }}" '
+            set -e
+            cd /opt/github-trending-to-wechat
+            git fetch origin main
+            git merge --ff-only origin/main
+            echo "已部署 $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
+          '
