@@ -56,6 +56,11 @@ python notify.py --test          # 测试失败告警通道（Server酱）
 `run_daily.py` 任一步失败，会通过 `notify.py` 把「失败的步骤 + 报错尾部」推送到 Server酱（需要环境变量 `send_key`）。
 零依赖，直接调 Server酱 HTTP 接口。未配置 `send_key` 时静默跳过，不影响主流程。
 
+## 网络重试
+
+所有 HTTP 调用（GitHub / 大模型 / 微信）都走 `netutil.urlopen`，对**瞬时错误**
+（连接中断、超时、5xx）自动退避重试 3 次（2s/4s/6s）；4xx 这类确定性错误立即抛出，不做无谓重试。
+
 ## 关键约束
 
 1. **首次运行没有增量。** 只有一天快照时，`fetch_and_rank` 会回退为「按 Star 排序」，涨星行显示「目前约 N Star」；**第二天起**才是真正的增长榜（「今日新增约 N Star」）。

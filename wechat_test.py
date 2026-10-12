@@ -17,6 +17,8 @@ import sys
 import urllib.request
 import uuid
 
+import netutil
+
 API = "https://api.weixin.qq.com/cgi-bin"
 
 
@@ -37,7 +39,7 @@ def build_multipart(path):
 def _post(url, data, ctype):
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", ctype)
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with netutil.urlopen(req, timeout=60) as r:
         return json.load(r)
 
 
@@ -49,7 +51,7 @@ def _upload(token, endpoint, path, extra=""):
 
 def get_token(appid, secret):
     url = f"{API}/token?grant_type=client_credential&appid={appid}&secret={secret}"
-    with urllib.request.urlopen(url, timeout=30) as r:
+    with netutil.urlopen(url, timeout=30) as r:
         data = json.load(r)
     if "access_token" not in data:
         sys.exit(f"取 token 失败: {data}")

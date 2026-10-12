@@ -21,6 +21,8 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+import netutil
+
 BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com/v1")
 MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 
@@ -51,7 +53,7 @@ def chat(messages, key=None, temperature=0.7):
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", f"Bearer {key}")
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with netutil.urlopen(req, timeout=180) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
         sys.exit(f"LLM 调用失败 HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")

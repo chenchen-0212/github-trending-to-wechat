@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+import netutil
+
 API = "https://api.github.com/search/repositories"
 
 
@@ -39,7 +41,7 @@ def _get(url, token):
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with netutil.urlopen(req, timeout=30) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:300]

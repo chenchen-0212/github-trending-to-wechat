@@ -56,6 +56,7 @@ Windows PowerShell 里用 `$env:GITHUB_TOKEN="..."`。
 | `wechat_test.py` | 微信凭证/权限自检（含 `--selftest` 离线自检） |
 | `run_daily.py` | 一键编排上面四步 |
 | `notify.py` | 失败告警：把失败的步骤和报错推送到 Server酱（零依赖） |
+| `netutil.py` | 带退避重试的 HTTP 调用，专治间歇性网络抖动 |
 | `SKILL.md` | 作为 AI Agent Skill 使用的说明 |
 
 ## 产出示例

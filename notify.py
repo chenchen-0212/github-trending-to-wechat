@@ -14,6 +14,8 @@ import sys
 import urllib.parse
 import urllib.request
 
+import netutil
+
 API = "https://sctapi.ftqq.com/{key}.send"
 TITLE_MAX = 32
 
@@ -38,7 +40,7 @@ def send(title, desp="", tags=None):
                                  data=urllib.parse.urlencode(data).encode(),
                                  method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with netutil.urlopen(req, timeout=15, tries=2) as r:
             j = json.load(r)
         return (j.get("code") == 0), j
     except Exception as e:
