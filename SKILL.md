@@ -19,6 +19,7 @@ description: 采集 GitHub 增长热榜，用大模型生成公众号风格中�
 | `LLM_BASE_URL` | 默认 `https://api.deepseek.com/v1`（通义/OpenAI 换这里） | 可选 |
 | `LLM_MODEL` | 默认 `deepseek-chat` | 可选 |
 | `WECHAT_APPID` / `WECHAT_APPSECRET` | 建草稿 | 必需 |
+| `send_key` | Server酱 sendkey，任一步失败时推送告警 | 可选 |
 
 ### 微信公众号侧
 
@@ -47,7 +48,13 @@ python run_daily.py --dry-run        # 只打印将要执行什么
 ```bash
 python wechat_test.py            # 取token → 传图 → 建草稿 → 回读
 python wechat_test.py --selftest # 离线自检
+python notify.py --test          # 测试失败告警通道（Server酱）
 ```
+
+## 失败告警
+
+`run_daily.py` 任一步失败，会通过 `notify.py` 把「失败的步骤 + 报错尾部」推送到 Server酱（需要环境变量 `send_key`）。
+零依赖，直接调 Server酱 HTTP 接口。未配置 `send_key` 时静默跳过，不影响主流程。
 
 ## 关键约束
 

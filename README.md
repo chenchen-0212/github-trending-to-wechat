@@ -37,6 +37,7 @@ export LLM_BASE_URL=https://api.deepseek.com/v1   # 可选，默认 DeepSeek
 export LLM_MODEL=deepseek-chat                     # 可选
 export WECHAT_APPID=wx...              # 公众号
 export WECHAT_APPSECRET=xxx            # 公众号（需在后台启用 + 加 IP 白名单）
+export send_key=xxx                    # 可选：Server酱 sendkey，任一步失败时推送告警
 
 # 2. 跑一遍
 python run_daily.py        # 全流程，最后产出公众号草稿
@@ -54,6 +55,7 @@ Windows PowerShell 里用 `$env:GITHUB_TOKEN="..."`。
 | `wechat_publish.py` | 转 HTML + 传图 + 建草稿 |
 | `wechat_test.py` | 微信凭证/权限自检（含 `--selftest` 离线自检） |
 | `run_daily.py` | 一键编排上面四步 |
+| `notify.py` | 失败告警：把失败的步骤和报错推送到 Server酱（零依赖） |
 | `SKILL.md` | 作为 AI Agent Skill 使用的说明 |
 
 ## 产出示例

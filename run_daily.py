@@ -8,10 +8,16 @@
 需要环境变量：
     LLM_API_KEY(或 DEEPSEEK_API_KEY)   生成文章
     WECHAT_APPID / WECHAT_APPSECRET    建草稿
+    send_key                           可选，失败时用 Server酱 推送告警
 """
 import argparse
 import subprocess
 import sys
+
+try:
+    import notify          # send_key 未配置时不影响主流程
+except Exception:
+    notify = None
 
 PY = sys.executable
 
@@ -37,9 +43,19 @@ def main():
 
     for name, cmd in steps:
         print(f"\n===== {name} =====", flush=True)
-        r = subprocess.run(cmd)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        sys.stdout.write(r.stdout or "")
+        sys.stderr.write(r.stderr or "")
         if r.returncode != 0:
-            sys.exit(f"{name} 失败(退出码 {r.returncode})，已中止")
+            tail = ((r.stdout or "") + "\n" + (r.stderr or ""))[-1500:]
+            if notify:
+                ok, info = notify.send(f"GitHub日报失败 · {name}",
+                                       f"退出码 {r.returncode}\n\n{tail}", "服务器报警")
+            else:
+                ok, info = False, "notify 未加载"
+            sys.exit(f"{name} 失败(退出码 {r.returncode})，已中止；通知"
+                     f"{'已发送' if ok else '失败: ' + str(info)}")
     print("\n全流程完成", flush=True)
 
 
