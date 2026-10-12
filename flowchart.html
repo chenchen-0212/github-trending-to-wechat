@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>每日 GitHub 热榜 → 公众号 自动化流程图</title>
+<style>
+  body{margin:0;padding:40px;background:#f5f6f8;font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#2b2b2b;}
+  h1{font-size:22px;text-align:center;margin:0 0 6px;}
+  .sub{text-align:center;color:#8a8a8a;font-size:13px;margin-bottom:28px;}
+  .col{max-width:760px;margin:0 auto;}
+  .box{background:#fff;border-radius:10px;padding:14px 18px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  .trigger{background:#07c160;color:#fff;text-align:center;font-weight:bold;font-size:16px;}
+  .trigger small{display:block;font-weight:normal;font-size:12px;opacity:.9;margin-top:4px;}
+  .runner{border:2px solid #07c160;background:#fafffb;padding:0;}
+  .runner>.head{background:#07c160;color:#fff;font-weight:bold;padding:10px 16px;font-size:15px;}
+  .step{display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border-top:1px dashed #cfe9d6;}
+  .step:first-child{border-top:none;}
+  .n{flex:0 0 30px;height:30px;border-radius:50%;background:#07c160;color:#fff;font-weight:bold;
+     display:flex;align-items:center;justify-content:center;font-size:14px;}
+  .step h3{margin:0 0 6px;font-size:15px;color:#1a1a1a;}
+  .step p{margin:2px 0;font-size:13px;color:#555;line-height:1.6;}
+  .io{font-family:Consolas,monospace;font-size:12px;color:#576b95;background:#f2f4f8;border-radius:4px;padding:1px 6px;}
+  .arrow{text-align:center;color:#07c160;font-size:22px;line-height:1;margin:10px 0;}
+  .out{background:#fff;border-left:4px solid #ffb300;text-align:center;}
+  .out b{font-size:15px;}
+  .out small{display:block;color:#8a8a8a;font-size:12px;margin-top:6px;}
+  .note{margin-top:26px;background:#fff;border-radius:10px;padding:16px 18px;font-size:13px;color:#555;line-height:1.9;}
+  .note b{color:#333;}
+  code{background:#f2f4f8;border-radius:4px;padding:1px 5px;font-family:Consolas,monospace;color:#c7254e;}
+</style>
+</head>
+<body>
+<div class="col">
+  <h1>每日 GitHub 热榜 → 微信公众号　自动化流程</h1>
+  <div class="sub">一条链，从抓取到草稿，无人值守</div>
+
+  <div class="box trigger">① 定时触发
+    <small>Windows 任务计划 · 每天 09:00 · S4U 无人登录也运行</small>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <div class="box runner">
+    <div class="head">② run_daily.py　编排三步</div>
+
+    <div class="step">
+      <div class="n">1</div>
+      <div>
+        <h3>采集榜单 &nbsp;<span class="io">fetch_and_rank.py</span></h3>
+        <p>调 GitHub Search API 拉取最近新建的热门仓库（≈300 个）</p>
+        <p>读昨日快照 → 算每个项目的 <b>Star 增量</b>（首日无增量则回退按 Star 排序）</p>
+        <p>输出 <span class="io">data/daily/&lt;日期&gt;.md / .json</span>，并保存今日快照</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">2</div>
+      <div>
+        <h3>生成文章 &nbsp;<span class="io">generate_article.py</span></h3>
+        <p>读榜单 json，调 <b>DeepSeek</b> 按「逛逛GitHub」风格写中文文案</p>
+        <p>结构由代码固定、文案由模型生成 → 输出 <span class="io">data/articles/&lt;日期&gt;.md</span></p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">3</div>
+      <div>
+        <h3>建草稿 &nbsp;<span class="io">wechat_publish.py</span></h3>
+        <p>逐张配图下载 → <b>uploadimg</b> 换成微信托管地址</p>
+        <p>封面图 <b>add_material</b>；正文转成带内联样式的 HTML</p>
+        <p><b>draft/add</b> 写入公众号草稿箱</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow">▼</div>
+
+  <div class="box out"><b>③ 公众号草稿箱</b>
+    <small>人工审核 → 手动发布（不自动群发）</small>
+  </div>
+
+  <div class="note">
+    <b>运行环境依赖</b><br>
+    · 环境变量（机器级，S4U 可读）：<code>DEEPSEEK_API_KEY</code> · <code>WECHAT_APPID</code> · <code>WECHAT_APPSECRET</code><br>
+    · 运行机器的公网出口 IP 需加入公众号后台白名单<br>
+    · 数据留痕：<code>data/snapshots/</code>（算增量基线）· <code>logs/run.log</code>（追加日志）
+  </div>
+</div>
+</body>
+</html>
