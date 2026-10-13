@@ -76,7 +76,18 @@ def build_html(token, md_text, dry_run):
     td_t = "border:1px solid #e5e5e5;padding:6px 8px;color:#555;"
 
     body, in_code, digest, n = [], False, None, 0
-    table_rows = []
+    table_rows, code_lines = [], []
+
+    def flush_code():
+        """把攒下的代码行拼成一个卡片。原来每行一个卡片，多行代码会散成一堆。"""
+        if not code_lines:
+            return
+        rendered = []
+        for x in code_lines:
+            pad = "&nbsp;" * (len(x) - len(x.lstrip()))   # 保留缩进
+            rendered.append(pad + esc(x.strip()))
+        body.append(f'<section style="{card_s}">' + "<br/>".join(rendered) + "</section>")
+        code_lines.clear()
 
     def flush_table():
         """把攒下的表格行拼成 HTML 表格（丢掉 |---|---| 分隔行）。"""
@@ -95,15 +106,19 @@ def build_html(token, md_text, dry_run):
 
     for ln in lines[1:]:
         s = ln.strip()
+        if in_code:                                   # 代码块内容：攒起来最后拼成一个卡片
+            if s.startswith("```"):
+                flush_code()
+                in_code = False
+            else:
+                code_lines.append(ln.rstrip())
+            continue
         if not s:
             flush_table()
             continue
         if s.startswith("```"):
             flush_table()
-            in_code = not in_code
-            continue
-        if in_code:                                   # 代码块内容 → 灰底卡片
-            body.append(f'<section style="{card_s}">{esc(s)}</section>')
+            in_code = True
             continue
         if s == "---":
             flush_table()
@@ -126,10 +141,12 @@ def build_html(token, md_text, dry_run):
             body.append(f'<p style="{img_p}"><img src="{wurl}" '
                         f'style="max-width:100%;border-radius:6px;"/></p>')
             continue
-        mh = re.match(r"#{2,4}\s+(.+)$", s)           # ## 小标题
+        mh = re.match(r"#{1,6}\s*(.+)$", s)           # #/##/### 小标题（代码块内的 # 已在上面处理）
         if mh:
-            body.append(f'<p style="{h2_p}">{esc(mh.group(1).strip())}</p>')
-            continue
+            heading = mh.group(1).strip().lstrip("#").strip()   # 容错：去掉标题里多写的 #
+            if heading:
+                body.append(f'<p style="{h2_p}">{esc(heading)}</p>')
+                continue
         if s.startswith(">"):                         # 引用块
             body.append(f'<section style="{quote_s}">{esc(s.lstrip("> ").strip())}</section>')
             continue
@@ -157,6 +174,7 @@ def build_html(token, md_text, dry_run):
             if clean:
                 digest = clean
     flush_table()
+    flush_code()
     return title, "".join(body), (digest or title)
 
 
