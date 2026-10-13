@@ -51,6 +51,22 @@ python wechat_test.py --selftest # 离线自检
 python notify.py --test          # 测试失败告警通道（Server酱）
 ```
 
+## 单项目深挖（另一条线）
+
+和上面的「每日榜单」是**两条独立的线**：这条围绕**一个**成熟项目写一篇深度文。
+
+```bash
+python feature_article.py                     # 自动选题
+python feature_article.py --repo owner/name   # 指定项目
+python feature_article.py --dry-run           # 只看选题与扒到的图
+python feature_article.py --upload            # 生成后直接发到公众号草稿箱
+```
+
+- **选题**：GitHub Search 拉一批成熟项目（Star≥1500 且近 60 天有推送），由大模型挑出最适合写深度文的
+- **配图**：从 README 引用 + 仓库文件树里扒，滤掉徽章 / 图标 / App 资源 / 测试夹具；确实没有就退回仓库卡片
+- **风格**：由 `ARTICLE_STYLE.md` 约束——单项目深挖骨架、短板必须 ≥3 条且具体、每个数字标日期
+- **产出**：`data/features/<日期>-<owner>_<repo>.md`，配图存 `examples/features/<owner>_<repo>/`
+
 ## 失败告警
 
 `run_daily.py` 任一步失败，会通过 `notify.py` 把「失败的步骤 + 报错尾部」推送到 Server酱（需要环境变量 `send_key`）。
@@ -67,6 +83,7 @@ python notify.py --test          # 测试失败告警通道（Server酱）
 2. **只建草稿，不自动发表。** 官方发布接口 `freepublish/submit` 需要账号有对应权限；**个人未认证订阅号会返回 `48001`**。最终发布由人工在后台完成。
 3. **快照是增量基石。** 别删 `data/snapshots/`，否则增量从头开始。
 4. **依赖固定出口 IP。** IP 变了要在公众号后台重加白名单。
+5. **数据统计接口不可用。** `datacube/*`（文章阅读量、用户分析等）在个人未认证号上同样返回 `48001`，拿不到阅读数据。
 
 ## 定时执行
 

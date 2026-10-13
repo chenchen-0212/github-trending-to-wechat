@@ -65,20 +65,54 @@ def build_html(token, md_text, dry_run):
     img_p = "text-align:center;margin:0 0 18px;"
     hr_s = "border-top:1px dashed #e0e0e0;margin:2px 0 22px;"
     end_p = "font-size:13px;color:#9a9a9a;text-align:center;margin:26px 0 8px;"
+    # 单项目深挖文章会用到的元素
+    h2_p = ("font-size:17px;font-weight:bold;color:#1a1a1a;line-height:1.5;"
+            "margin:26px 0 12px;border-left:4px solid #07c160;padding-left:10px;")
+    quote_s = ("border-left:3px solid #d0d0d0;padding:6px 0 6px 12px;margin:0 0 16px;"
+               "color:#666;font-size:14px;line-height:1.7;")
+    li_p = "font-size:15px;line-height:1.75;color:#333;margin:0 0 8px;padding-left:16px;"
+    table_t = "width:100%;border-collapse:collapse;margin:0 0 18px;font-size:13px;"
+    th_t = "border:1px solid #e5e5e5;background:#f7f7f7;padding:6px 8px;text-align:left;color:#333;"
+    td_t = "border:1px solid #e5e5e5;padding:6px 8px;color:#555;"
 
     body, in_code, digest, n = [], False, None, 0
+    table_rows = []
+
+    def flush_table():
+        """把攒下的表格行拼成 HTML 表格（丢掉 |---|---| 分隔行）。"""
+        if not table_rows:
+            return
+        rows = [r for r in table_rows if not re.fullmatch(r"[\s|:\-]+", r)]
+        parts = [f'<table style="{table_t}">']
+        for k, row in enumerate(rows):
+            cells = [c.strip() for c in row.strip().strip("|").split("|")]
+            tag, style = ("th", th_t) if k == 0 else ("td", td_t)
+            parts.append("<tr>" + "".join(
+                f'<{tag} style="{style}">{esc(c)}</{tag}>' for c in cells) + "</tr>")
+        parts.append("</table>")
+        body.append("".join(parts))
+        table_rows.clear()
+
     for ln in lines[1:]:
         s = ln.strip()
         if not s:
+            flush_table()
             continue
         if s.startswith("```"):
+            flush_table()
             in_code = not in_code
             continue
-        if in_code:                                   # 代码块内容（开源地址）→ 灰底卡片
+        if in_code:                                   # 代码块内容 → 灰底卡片
             body.append(f'<section style="{card_s}">{esc(s)}</section>')
             continue
         if s == "---":
+            flush_table()
             continue
+        if s.startswith("|") and s.endswith("|"):     # 表格行，攒着一起渲染
+            table_rows.append(s)
+            continue
+        flush_table()
+
         m = re.match(r"!\[.*?\]\((.*?)\)", s)
         if m:
             if dry_run:
@@ -91,6 +125,16 @@ def build_html(token, md_text, dry_run):
                 wurl = up["url"]
             body.append(f'<p style="{img_p}"><img src="{wurl}" '
                         f'style="max-width:100%;border-radius:6px;"/></p>')
+            continue
+        mh = re.match(r"#{2,4}\s+(.+)$", s)           # ## 小标题
+        if mh:
+            body.append(f'<p style="{h2_p}">{esc(mh.group(1).strip())}</p>')
+            continue
+        if s.startswith(">"):                         # 引用块
+            body.append(f'<section style="{quote_s}">{esc(s.lstrip("> ").strip())}</section>')
+            continue
+        if re.match(r"^[-*]\s+", s):                  # 无序列表
+            body.append(f'<p style="{li_p}">· {esc(s[2:].strip())}</p>')
             continue
         if re.fullmatch(r"\*\*\d+\*\*", s):           # 序号 01 → 灰色小字，条目间加分割线
             if n:
@@ -106,10 +150,39 @@ def build_html(token, md_text, dry_run):
         if s.startswith("目前约 ") or s.startswith("今日新增约 "):  # 涨星行 → 浅灰
             body.append(f'<p style="{star_p}">{esc(s)}</p>')
             continue
-        body.append(f'<p style="{body_p}">{esc(s)}</p>')
+        plain = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", esc(s))  # 行内加粗
+        body.append(f'<p style="{body_p}">{plain}</p>')
         if digest is None:
-            digest = s
+            clean = re.sub(r"[*`#>|\[\]]", "", s).strip()
+            if clean:
+                digest = clean
+    flush_table()
     return title, "".join(body), (digest or title)
+
+
+def publish(token, md):
+    """把文章 md 传成公众号草稿。返回 (media_id, title, html, digest)。"""
+    title, html, digest = build_html(token, md, False)
+    m = re.search(r"!\[.*?\]\((.*?)\)", md)
+    if not m:
+        sys.exit("文章里没有任何图片，无法设置封面（公众号草稿必须有封面图）")
+    cover = download_image(m.group(1))
+    mat = wt._upload(token, "material/add_material", cover, "&type=image")
+    if "media_id" not in mat:
+        sys.exit(f"封面图上传失败: {mat}")
+    article = {
+        "title": title,
+        "author": "",
+        "digest": digest[:120],
+        "content": html,
+        "thumb_media_id": mat["media_id"],
+        "need_open_comment": 0,
+        "only_fans_can_comment": 0,
+    }
+    d = wt.add_draft(token, [article])
+    if "media_id" not in d:
+        sys.exit(f"建草稿失败: {d}")
+    return d["media_id"], title, html, digest
 
 
 def main():
@@ -122,49 +195,34 @@ def main():
     if not os.path.exists(args.article):
         sys.exit(f"找不到文章文件：{args.article}\n先跑 generate_article.py 生成文章。")
     md = open(args.article, encoding="utf-8").read()
-    token = None
-    if not args.dry_run:
-        appid = os.environ.get("WECHAT_APPID", "").strip()
-        secret = os.environ.get("WECHAT_APPSECRET", "").strip()
-        if not appid or not secret:
-            sys.exit("缺少环境变量 WECHAT_APPID / WECHAT_APPSECRET")
-        token = wt.get_token(appid, secret)
-        print("1) access_token:", wt._mask(token))
 
-    title, html, digest = build_html(token, md, args.dry_run)
-    print("2) 标题:", title)
-    print("   摘要:", digest[:50])
-    print("   正文长度:", len(html), "字符")
     if args.dry_run:
+        title, html, digest = build_html(None, md, True)
+        print("1) 标题:", title)
+        print("   摘要:", digest[:50])
+        print("   正文长度:", len(html), "字符")
         print("---- HTML 预览(前 500 字) ----")
         print(html[:500])
         return
 
-    cover = download_image(re.search(r"!\[.*?\]\((.*?)\)", md).group(1))
-    mat = wt._upload(token, "material/add_material", cover, "&type=image")
-    if "media_id" not in mat:
-        sys.exit(f"封面图上传失败: {mat}")
-    print("3) 封面 thumb_media_id:", mat["media_id"])
+    appid = os.environ.get("WECHAT_APPID", "").strip()
+    secret = os.environ.get("WECHAT_APPSECRET", "").strip()
+    if not appid or not secret:
+        sys.exit("缺少环境变量 WECHAT_APPID / WECHAT_APPSECRET")
+    token = wt.get_token(appid, secret)
+    print("1) access_token:", wt._mask(token))
 
-    article = {
-        "title": title,
-        "author": "",
-        "digest": digest[:120],
-        "content": html,
-        "thumb_media_id": mat["media_id"],
-        "need_open_comment": 0,
-        "only_fans_can_comment": 0,
-    }
-    d = wt.add_draft(token, [article])
-    print("4) draft/add:", d)
-    if "media_id" not in d:
-        sys.exit(f"建草稿失败: {d}")
+    media_id, title, html, digest = publish(token, md)
+    print("2) 标题:", title)
+    print("   摘要:", digest[:50])
+    print("   正文长度:", len(html), "字符")
+    print("3) draft/add media_id:", media_id)
 
     drafts = wt.list_drafts(token)
     titles = [ni.get("title") for it in drafts.get("item", [])
               for ni in it.get("content", {}).get("news_item", [])]
-    print("5) 草稿箱:", titles)
-    print("\nOK: 10 个项目草稿已创建")
+    print("4) 草稿箱:", titles)
+    print("\nOK: 草稿已创建")
 
 
 if __name__ == "__main__":
