@@ -50,6 +50,14 @@ def parse_json(text):
     return json.loads(t[i:j + 1])
 
 
+def done_slugs():
+    """已经写过的项目（文件名 <日期>-<owner>_<repo>.md），用于避免重复选题。"""
+    if not os.path.isdir(OUT_DIR):
+        return set()
+    return {f[11:-3] for f in os.listdir(OUT_DIR)
+            if f.endswith(".md") and len(f) > 14}
+
+
 def candidates(token, per_page=30):
     """拉一批成熟、仍在维护的项目当候选池（Star>=1500 且近 60 天有推送）。"""
     since = (datetime.now(timezone.utc) - timedelta(days=60)).date().isoformat()
@@ -217,7 +225,14 @@ def main():
         items = candidates(token)
         if not items:
             sys.exit("候选为空，检查 GITHUB_TOKEN 或稍后重试")
-        print(f"候选 {len(items)} 个，交给模型选题…")
+        done = done_slugs()
+        fresh = [r for r in items if r["full_name"].replace("/", "_") not in done]
+        if fresh:
+            print(f"候选 {len(items)} 个，其中 {len(items) - len(fresh)} 个已写过，剩 {len(fresh)} 个新项目")
+            items = fresh
+        else:
+            print(f"候选 {len(items)} 个都已写过，本次从候选中重挑")
+        print(f"交给模型选题…")
         full_name, reason = pick(items)
         print(f"选中: {full_name}  ← {reason}")
     if not full_name:
