@@ -70,16 +70,36 @@ python notify.py --test          # 测试失败告警通道（Server酱）
 
 ## 定时执行
 
-以 Windows 任务计划为例（无人登录也运行）：
+### Linux cron（推荐，云服务器常驻）
+
+密钥放 root-only 文件，cron 里 `source` 进来：
+
+```bash
+cat > /etc/github-trending.env <<'EOF'
+export DEEPSEEK_API_KEY='...'
+export WECHAT_APPID='...'
+export WECHAT_APPSECRET='...'
+export send_key='...'
+EOF
+chmod 600 /etc/github-trending.env
+
+# 每天 08:00 执行（自动保留已有 crontab 条目）
+( crontab -l 2>/dev/null; \
+  echo '0 8 * * * . /etc/github-trending.env; cd /opt/github-trending-to-wechat && mkdir -p logs && python3 run_daily.py >> logs/run.log 2>&1' \
+) | crontab -
+```
+
+### Windows 任务计划（本机跑）
 
 ```powershell
 $dir = 'C:\path\to\github-trending-to-wechat'
 $arg = '/c cd /d "' + $dir + '" && python run_daily.py >> logs\run.log 2>&1'
 $action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $arg -WorkingDirectory $dir
-$trigger = New-ScheduledTaskTrigger -Daily -At 9:00am
+$trigger = New-ScheduledTaskTrigger -Daily -At 8:00am
 Register-ScheduledTask -TaskName 'GithubTrendingDaily' -Action $action -Trigger $trigger `
   -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) `
   -Principal (New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType S4U)
 ```
 
 > 环境变量建议设为**机器级**（`[Environment]::SetEnvironmentVariable(..., 'Machine')`），S4U 会话才能读到。
+> 云服务器出口 IP 比家用宽带稳定，能少踩公众号 IP 白名单的坑——长期无人值守优先选它。
