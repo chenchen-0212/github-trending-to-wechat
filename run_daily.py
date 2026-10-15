@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""每日一键流程：采集榜单 → 生成文章 → 优化标题 → 建微信草稿。
+"""每日一键流程：采集榜单 → 选榜·霸榜判定 → 生成文章 → 优化标题 → 建微信草稿。
 
     python run_daily.py                  # 全流程
-    python run_daily.py --skip-publish   # 只到生成文章
+    python run_daily.py --skip-publish   # 不建草稿（跑到优化标题）
     python run_daily.py --dry-run        # 只打印将要执行什么
 
 需要环境变量：
@@ -22,10 +22,11 @@ except Exception:
 PY = sys.executable
 
 STEPS = [
-    ("1/4 采集榜单", [PY, "fetch_and_rank.py"]),
-    ("2/4 生成文章", [PY, "generate_article.py"]),
-    ("3/4 优化标题", [PY, "optimize_title.py"]),
-    ("4/4 建草稿", [PY, "wechat_publish.py"]),
+    ("1/5 采集榜单", [PY, "fetch_and_rank.py"]),
+    ("2/5 选榜·霸榜判定", [PY, "select_daily.py"]),
+    ("3/5 生成文章", [PY, "generate_article.py"]),
+    ("4/5 优化标题", [PY, "optimize_title.py"]),
+    ("5/5 建草稿", [PY, "wechat_publish.py"]),
 ]
 
 

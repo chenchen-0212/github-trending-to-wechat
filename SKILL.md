@@ -5,7 +5,7 @@ description: 采集 GitHub 增长热榜，用大模型生成公众号风格中�
 
 # GitHub 增长热榜 → 微信公众号
 
-把「采集 → 生成文章 → 优化标题 → 建草稿」串成一条每日可定时执行的流水线。
+把「采集 → 选榜·霸榜判定 → 生成文章 → 优化标题 → 建草稿」串成一条每日可定时执行的流水线。
 **零第三方依赖**，只用 Python 标准库。
 
 ## 前置条件
@@ -30,16 +30,17 @@ description: 采集 GitHub 增长热榜，用大模型生成公众号风格中�
 
 | 步骤 | 脚本 | 做什么 | 产出 |
 |---|---|---|---|
-| 1/4 | `fetch_and_rank.py` | 拉 GitHub 候选（默认最近 30 天新建、Star>50），用昨日快照算 **Star 增量** | `data/daily/<日期>.md` `data/daily/<日期>.json` |
-| 2/4 | `generate_article.py` | 大模型按公众号风格写中文文案 | `data/articles/<日期>.md` |
-| 3/4 | `optimize_title.py` | 生成 6 个候选标题选优；有本号历史阅读数据时并入参考 | 就地改写文章首行标题 |
-| 4/4 | `wechat_publish.py` | 逐图下载 → `uploadimg` 换微信托管 URL → 转内联样式 HTML → `draft/add` | 公众号草稿 |
+| 1/5 | `fetch_and_rank.py` | 拉 GitHub 候选（默认最近 30 天新建、Star>50），用昨日快照算 **Star 增量** | `data/daily/<日期>.md` `data/daily/<日期>.json` |
+| 2/5 | `select_daily.py` | 记榜入库、算**连续上榜天数**；连续满 3 天的转一行简报，第 11 名起补满 10 篇详写 | `data/daily/<日期>.selected.json` + `data/tracking.db` |
+| 3/5 | `generate_article.py` | 大模型按公众号风格写中文文案（简报项只写一行卖点） | `data/articles/<日期>.md` |
+| 4/5 | `optimize_title.py` | 生成 6 个候选标题选优；有本号历史阅读数据时并入参考 | 就地改写文章首行标题 |
+| 5/5 | `wechat_publish.py` | 逐图下载 → `uploadimg` 换微信托管 URL → 转内联样式 HTML → `draft/add` | 公众号草稿 |
 
 一键执行：
 
 ```bash
 python run_daily.py              # 全流程
-python run_daily.py --skip-publish   # 只到生成文章，不碰微信
+python run_daily.py --skip-publish   # 不建草稿，只跑到优化标题
 python run_daily.py --dry-run        # 只打印将要执行什么
 ```
 
@@ -51,18 +52,32 @@ python wechat_test.py --selftest # 离线自检
 python notify.py --test          # 测试失败告警通道（Server酱）
 ```
 
+单独操作追踪库：
+
+```bash
+python tracking.py --stats                    # 看记录天数、最长连续、队列状态
+python tracking.py --backfill                 # 用 data/articles + data/daily 重建历史
+python tracking.py --selftest                 # 离线自检（连续天数/队列状态机）
+python tracking.py --enqueue owner/name       # 手工塞一个进深挖队列
+python tracking.py --requeue owner/name       # 把 failed/skipped 的重新放回队列
+python select_daily.py --date 2026-10-13 --dry-run   # 预览某天的收录与霸榜判定
+```
+
 ## 单项目深挖（另一条线）
 
 和上面的「每日榜单」是**两条独立的线**：这条围绕**一个**成熟项目写一篇深度文。
+由 `run_feature.sh` 控制成**精确每 72 小时**一次（cron 每 5 分钟调它一次，只有距上次成功满 72 小时才真跑；成功才写时间戳，失败下次即重试）。
 
 ```bash
-python feature_article.py                     # 自动选题
-python feature_article.py --repo owner/name   # 指定项目
-python feature_article.py --dry-run           # 只看选题与扒到的图
+python feature_article.py                     # 自动选题（深挖队列优先）
+python feature_article.py --no-from-db        # 忽略队列，直接找新项目
+python feature_article.py --repo owner/name   # 指定项目（不写队列）
+python feature_article.py --dry-run           # 只看选题与扒到的图，不调模型、不写库
 python feature_article.py --upload            # 生成后直接发到公众号草稿箱
 ```
 
-- **选题**：GitHub Search 拉一批成熟项目（Star≥1500 且近 60 天有推送），由大模型挑出最适合写深度文的
+- **选题**：**先消费深挖队列**（连续上榜满 5 天的项目，按连续天数优先）；队列空了才去 GitHub Search 拉一批成熟项目（Star≥1500 且近 60 天有推送）让大模型挑——一次只加一个，入队后立即深挖
+- **队列**：认领即置 `in_progress`，成功置 `done`；中途失败自动退回 `pending`（下次到点重试），重试 3 次转 `failed`。已在 `data/features/` 有成稿的项目会被跳过
 - **配图**：从 README 引用 + 仓库文件树里扒，滤掉徽章 / 图标 / App 资源 / 测试夹具；确实没有就退回仓库卡片
 - **风格**：由 `ARTICLE_STYLE.md` 约束——单项目深挖骨架、短板必须 ≥3 条且具体、每个数字标日期
 - **产出**：`data/features/<日期>-<owner>_<repo>.md`，配图存 `examples/features/<owner>_<repo>/`
@@ -84,6 +99,9 @@ python feature_article.py --upload            # 生成后直接发到公众号�
 3. **快照是增量基石。** 别删 `data/snapshots/`，否则增量从头开始。
 4. **依赖固定出口 IP。** IP 变了要在公众号后台重加白名单。
 5. **数据统计接口不可用。** `datacube/*`（文章阅读量、用户分析等）在个人未认证号上同样返回 `48001`，拿不到阅读数据。
+6. **追踪库是运行态。** `data/tracking.db` 在被忽略的 `data/` 下，**不随代码部署**；生产那份在运行机器上，与开发机互相独立。丢了用 `python tracking.py --backfill` 重建。
+7. **连续上榜按「实际记录过的天」算。** 日期口径 UTC；某天流水线没跑不会断连，跑过但项目掉出文章才重置为 1。满 3 天（第 4 天起）转一行简报，满 5 天入深挖队列。
+8. **两个 cron 会同时开库。** 日报 08:00 与深挖（每 5 分钟检查）都会读写 `tracking.db`；`run_feature.sh` 的 `flock` 只防自己，跨任务并发靠 SQLite 的 `journal_mode=WAL` + `busy_timeout=5000` 兜底。
 
 ## 定时执行
 

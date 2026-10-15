@@ -60,6 +60,8 @@ def build_html(token, md_text, dry_run):
     num_p = "font-size:14px;color:#9a9a9a;letter-spacing:1px;margin:0 0 6px;"
     title_p = "font-size:17px;font-weight:bold;color:#07c160;line-height:1.5;margin:0 0 12px;"
     star_p = "font-size:13px;color:#9a9a9a;margin:0 0 12px;"
+    # 霸榜简报标题（连续上榜 N 天）：蓝色，和详写标题的绿色区分开
+    brief_p = "font-size:15px;font-weight:bold;color:#576b95;line-height:1.5;margin:0 0 12px;"
     card_s = ("background:#f7f7f7;border-radius:6px;padding:12px 14px;margin:0 0 18px;"
               "font-size:13px;line-height:1.6;color:#576b95;word-break:break-all;")
     img_p = "text-align:center;margin:0 0 18px;"
@@ -158,6 +160,10 @@ def build_html(token, md_text, dry_run):
                 body.append(f'<section style="{hr_s}"></section>')
             n += 1
             body.append(f'<p style="{num_p}">{s.strip("*")}</p>')
+            continue
+        mb = re.fullmatch(r"\*\*(.+（连续上榜 \d+ 天）)\*\*", s)   # 霸榜简报：一行，无正文无图
+        if mb:
+            body.append(f'<p style="{brief_p}">{esc(mb.group(1))}</p>')
             continue
         mt = re.fullmatch(r"\*\*(.+)\*\*", s)         # 加粗整行：项目名 或 结尾
         if mt:

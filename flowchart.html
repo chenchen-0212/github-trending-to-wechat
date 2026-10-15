@@ -41,7 +41,7 @@
   <div class="arrow">▼</div>
 
   <div class="box runner">
-    <div class="head">② run_daily.py　编排三步</div>
+    <div class="head">② run_daily.py　编排五步</div>
 
     <div class="step">
       <div class="n">1</div>
@@ -56,14 +56,33 @@
     <div class="step">
       <div class="n">2</div>
       <div>
-        <h3>生成文章 &nbsp;<span class="io">generate_article.py</span></h3>
-        <p>读榜单 json，调 <b>DeepSeek</b> 按「逛逛GitHub」风格写中文文案</p>
-        <p>结构由代码固定、文案由模型生成 → 输出 <span class="io">data/articles/&lt;日期&gt;.md</span></p>
+        <h3>选榜·霸榜判定 &nbsp;<span class="io">select_daily.py</span></h3>
+        <p>把当天收录的项目写入 <span class="io">data/tracking.db</span>，算<b>连续上榜天数</b></p>
+        <p>连续满 3 天的项目从第 4 天起转<b>一行简报</b>（不写正文、不配图）</p>
+        <p>空出的篇幅由榜单<b>第 11 名起往后补</b>，保证当天仍有 10 篇详写；连续满 5 天入深挖队列</p>
+        <p>输出 <span class="io">data/daily/&lt;日期&gt;.selected.json</span></p>
       </div>
     </div>
 
     <div class="step">
       <div class="n">3</div>
+      <div>
+        <h3>生成文章 &nbsp;<span class="io">generate_article.py</span></h3>
+        <p>读 selected.json，调 <b>DeepSeek</b> 按「逛逛GitHub」风格写中文文案</p>
+        <p>结构由代码固定、文案由模型生成 → 输出 <span class="io">data/articles/&lt;日期&gt;.md</span></p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">4</div>
+      <div>
+        <h3>优化标题 &nbsp;<span class="io">optimize_title.py</span></h3>
+        <p>生成 6 个候选标题选优 → 就地改写文章首行</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="n">5</div>
       <div>
         <h3>建草稿 &nbsp;<span class="io">wechat_publish.py</span></h3>
         <p>逐张配图下载 → <b>uploadimg</b> 换成微信托管地址</p>
@@ -80,10 +99,13 @@
   </div>
 
   <div class="note">
+    <b>另一条线：单项目深挖</b>（每 72 小时一次，<code>run_feature.sh</code> 控时）<br>
+    · <code>feature_article.py</code> <b>先消费深挖队列</b>（连续上榜满 5 天的项目，按连续天数优先）<br>
+    · 队列空了才去 GitHub Search 挑新项目 → 一次只加一个 → 入队后立即深挖 → 发草稿箱<br><br>
     <b>运行环境依赖</b><br>
-    · 环境变量（机器级，S4U 可读）：<code>DEEPSEEK_API_KEY</code> · <code>WECHAT_APPID</code> · <code>WECHAT_APPSECRET</code><br>
+    · 环境变量（机器级 / <code>/etc/github-trending.env</code>）：<code>DEEPSEEK_API_KEY</code> · <code>WECHAT_APPID</code> · <code>WECHAT_APPSECRET</code> · <code>GITHUB_TOKEN</code><br>
     · 运行机器的公网出口 IP 需加入公众号后台白名单<br>
-    · 数据留痕：<code>data/snapshots/</code>（算增量基线）· <code>logs/run.log</code>（追加日志）
+    · 数据留痕：<code>data/snapshots/</code>（算增量基线）· <code>data/tracking.db</code>（上榜记录 + 深挖队列，运行态不入 git）· <code>logs/run.log</code>（追加日志）
   </div>
 </div>
 </body>
