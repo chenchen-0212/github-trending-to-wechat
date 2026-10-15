@@ -32,6 +32,9 @@ MAX_ATTEMPTS = 3           # 深挖失败重试上限，超过转 failed
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # 文章里形如 `**owner/repo：卖点**`（简报还带「（连续上榜 N 天）」）
 NAME_RE = re.compile(r"^\*\*([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)：")
+# 深挖成稿文件名 <日期>-<owner>_<repo>.md（slug 把 / 换成了 _，不可逆）
+FEATURE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)\.md$")
+GH_URL_RE = re.compile(r"https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_appearance (
@@ -303,6 +306,29 @@ def names_from_article(path):
     return names
 
 
+def full_name_from_article(path, slug):
+    """从深挖成稿正文里还原 owner/repo。
+
+    文件名 slug 把 `/` 换成了 `_`（`owner_repo`），单靠它反推在有下划线的 owner 上会错，
+    所以优先取正文里 GitHub 地址中「slug 形式与文件名一致」的那个；只有一个地址时直接用。
+    """
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return None
+    cands = []
+    for m in GH_URL_RE.finditer(text):
+        name = m.group(1)
+        if name.endswith(".git"):
+            name = name[:-4]
+        if name not in cands:
+            cands.append(name)
+    for c in cands:
+        if c.replace("/", "_") == slug:
+            return c
+    return cands[0] if len(cands) == 1 else None
+
+
 def backfill(conn, daily_dir=os.path.join("data", "daily"),
              articles_dir=os.path.join("data", "articles"),
              reset=True, dry_run=False):
@@ -358,6 +384,43 @@ def backfill(conn, daily_dir=os.path.join("data", "daily"),
         report.append(f"{date}: {len(entries)} 项（{src}），最高连续 {top} 天"
                       + ("" if top < BRIEF_FROM_STREAK
                          else f"，其中 {sum(1 for e in entries if e['role'] == 'brief')} 项已转简报"))
+    return report
+
+
+def backfill_deepdive(conn, features_dir=os.path.join("data", "features"), dry_run=False):
+    """把**已经写过的深挖成稿**补录进 deepdive_queue（status=done），免得再被深挖一遍。
+
+    文件在 data/features/ 里但队列里没有记录的项目，靠这一步补上；
+    队列里原来是 pending/in_progress 的，有成稿就以成稿为准置为 done。
+    """
+    if not os.path.isdir(features_dir):
+        return []
+    work = memory_conn() if dry_run else conn
+    report = []
+    for f in sorted(os.listdir(features_dir)):
+        m = FEATURE_RE.match(f)
+        if not m:
+            continue
+        date, slug = m.group(1), m.group(2)
+        path = os.path.join(features_dir, f)
+        name = full_name_from_article(path, slug) or slug.replace("_", "/", 1)
+        when = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat()
+        note = f"已有成稿：{path}"
+        with work:
+            row = work.execute("SELECT status FROM deepdive_queue WHERE full_name = ?",
+                               (name,)).fetchone()
+            if row:
+                prev = row["status"]
+                work.execute("UPDATE deepdive_queue SET status='done', finished_at=?, note=?"
+                             " WHERE full_name = ?", (when, note, name))
+                report.append(f"{date}  {name}  → done（原 {prev}，{f}）")
+            else:
+                work.execute(
+                    "INSERT INTO deepdive_queue"
+                    "(full_name, source, max_streak, status, enqueued_at, finished_at,"
+                    " attempt_count, note) VALUES(?, 'backfill', 0, 'done', ?, ?, 0, ?)",
+                    (name, when, when, note))
+                report.append(f"{date}  {name}  → done（补录，{f}）")
     return report
 
 
@@ -478,6 +541,22 @@ def selftest():
     assert names_from_article(tmp) == ["storytold/photocraft", "a/b"], names_from_article(tmp)
     os.unlink(tmp)
 
+    # 11) 深挖成稿还原 owner/repo：正文混有同类项目地址时要挑 slug 对得上的那个
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+        f.write("# 标题\n\n和 https://github.com/other/textract 比一下。\n\n"
+                "项目地址：https://github.com/microsoft/markitdown\n"
+                "装它：git clone https://github.com/microsoft/markitdown.git\n")
+        tmp = f.name
+    assert full_name_from_article(tmp, "microsoft_markitdown") == "microsoft/markitdown", \
+        full_name_from_article(tmp, "microsoft_markitdown")
+    # owner 带下划线时，正文里只有一个地址也能认出来（slug 反推会错）
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+        f.write("项目地址：https://github.com/my_org/tool\n")
+        tmp2 = f.name
+    assert full_name_from_article(tmp2, "my_org_tool") == "my_org/tool"
+    os.unlink(tmp)
+    os.unlink(tmp2)
+
     print("tracking selftest ok")
 
 
@@ -497,6 +576,7 @@ def main():
     ap.add_argument("--max-streak", type=int, default=0)
     ap.add_argument("--daily-dir", default=os.path.join("data", "daily"))
     ap.add_argument("--articles-dir", default=os.path.join("data", "articles"))
+    ap.add_argument("--features-dir", default=os.path.join("data", "features"))
     args = ap.parse_args()
 
     if args.selftest:
@@ -507,9 +587,17 @@ def main():
     init_db(conn)
 
     if args.backfill:
+        prefix = "预览: " if args.dry_run else ""
+        print(f"{prefix}[日报] 上榜记录")
         for line in backfill(conn, args.daily_dir, args.articles_dir,
                              reset=not args.no_reset, dry_run=args.dry_run):
-            print(("预览: " if args.dry_run else "") + line)
+            print(prefix + line)
+        print(f"{prefix}[深挖] 已有成稿")
+        rows = backfill_deepdive(conn, args.features_dir, args.dry_run)
+        for line in rows:
+            print(prefix + line)
+        if not rows:
+            print(prefix + "（data/features/ 下没有成稿）")
         return
     if args.enqueue:
         print(f"{args.enqueue} → {enqueue_deepdive(conn, args.enqueue, args.source, args.max_streak)}")

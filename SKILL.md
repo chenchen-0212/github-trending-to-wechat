@@ -56,7 +56,7 @@ python notify.py --test          # 测试失败告警通道（Server酱）
 
 ```bash
 python tracking.py --stats                    # 看记录天数、最长连续、队列状态
-python tracking.py --backfill                 # 用 data/articles + data/daily 重建历史
+python tracking.py --backfill                 # 重建历史：日报上榜记录 + 深挖成稿补录
 python tracking.py --selftest                 # 离线自检（连续天数/队列状态机）
 python tracking.py --enqueue owner/name       # 手工塞一个进深挖队列
 python tracking.py --requeue owner/name       # 把 failed/skipped 的重新放回队列

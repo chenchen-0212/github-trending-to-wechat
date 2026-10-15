@@ -110,7 +110,7 @@ Windows PowerShell 里用 `$env:GITHUB_TOKEN="..."`。
 - **数据统计接口同样不可用。** `datacube/*`（文章阅读量、用户分析等）在个人未认证号上同样返回 `48001`，拿不到阅读数据。
 - **依赖固定出口 IP。** 运行机器的公网 IP 要在公众号后台白名单里，IP 变了会报 `40164`。
 - **大模型文案需人工过目。** 生成的标题/描述建议发布前审一遍。
-- **追踪库 `data/tracking.db` 是运行态，不入 git。** 它在被忽略的 `data/` 下，**不随代码部署**——生产那份在运行机器上（当前是 ECS），本地开发机是独立的一份。丢了可以从 `data/articles/` + `data/daily/` 重建：`python tracking.py --backfill`。
+- **追踪库 `data/tracking.db` 是运行态，不入 git。** 它在被忽略的 `data/` 下，**不随代码部署**——生产那份在运行机器上（当前是 ECS），本地开发机是独立的一份。丢了可以重建：`python tracking.py --backfill`（日报上榜记录来自 `data/articles/` + `data/daily/`，深挖成稿来自 `data/features/`）。
 - **连续上榜按「实际记录过的天」算。** 日期口径是 UTC；某天流水线没跑**不会**断连，跑过但项目掉出文章才重置为 1。连续满 3 天（第 4 天起）转一行简报，连续满 5 天自动进入深挖队列。
 - **深挖队列每 72 小时消费一个**（由 `run_feature.sh` 控时），按连续天数优先、同分先入先出；失败自动回队列，重试 3 次后转 `failed`，可用 `python tracking.py --requeue owner/name` 重开。
 
