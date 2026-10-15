@@ -56,10 +56,14 @@ def parse_json(text):
 
 
 def done_slugs():
-    """已经写过的项目（文件名 <日期>-<owner>_<repo>.md），用于避免重复选题。"""
+    """已经写过的项目（文件名 <日期>-<owner>_<repo>.md），用于避免重复选题。
+
+    统一转小写：GitHub 的 owner/repo 大小写不保证一致（文件名里的可能是生成当时的写法），
+    直接比字符串会漏判成「没写过」，导致重复深挖。
+    """
     if not os.path.isdir(OUT_DIR):
         return set()
-    return {f[11:-3] for f in os.listdir(OUT_DIR)
+    return {f[11:-3].lower() for f in os.listdir(OUT_DIR)
             if f.endswith(".md") and len(f) > 14}
 
 
@@ -219,7 +223,8 @@ def discover(token, exclude):
         sys.exit("候选为空，检查 GITHUB_TOKEN 或稍后重试")
     done = done_slugs()
     fresh = [r for r in items
-             if r["full_name"].replace("/", "_") not in done and r["full_name"] not in exclude]
+             if r["full_name"].replace("/", "_").lower() not in done
+             and r["full_name"] not in exclude]
     if fresh:
         print(f"候选 {len(items)} 个，排除已写过/已入队 {len(items) - len(fresh)} 个，"
               f"剩 {len(fresh)} 个新项目")
@@ -245,11 +250,11 @@ def choose(token, conn, args):
     for _ in range(5):
         if args.dry_run:                       # 预览不认领，免得留下 in_progress 僵尸
             cand = [q for q in tracking.pending_deepdive(conn)
-                    if q["full_name"].replace("/", "_") not in done]
+                    if q["full_name"].replace("/", "_").lower() not in done]
             row = cand[0] if cand else None
         else:
             row = tracking.claim_deepdive(conn)
-            if row and row["full_name"].replace("/", "_") in done:
+            if row and row["full_name"].replace("/", "_").lower() in done:
                 tracking.mark_deepdive_skipped(conn, row["full_name"], "已有成稿")
                 print(f"跳过 {row['full_name']}（已有成稿），换队列下一个")
                 continue
