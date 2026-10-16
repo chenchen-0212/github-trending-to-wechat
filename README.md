@@ -113,6 +113,7 @@ Windows PowerShell 里用 `$env:GITHUB_TOKEN="..."`。
 - **追踪库 `data/tracking.db` 是运行态，不入 git。** 它在被忽略的 `data/` 下，**不随代码部署**——生产那份在运行机器上（当前是 ECS），本地开发机是独立的一份。丢了可以重建：`python tracking.py --backfill`（日报上榜记录来自 `data/articles/` + `data/daily/`，深挖成稿来自 `data/features/`）。
 - **连续上榜按「实际记录过的天」算。** 日期口径是 UTC；某天流水线没跑**不会**断连，跑过但项目掉出文章才重置为 1。连续满 3 天（第 4 天起）转一行简报，连续满 5 天自动进入深挖队列。
 - **深挖队列每 72 小时消费一个**（由 `run_feature.sh` 控时），按连续天数优先、同分先入先出；失败自动回队列，重试 3 次后转 `failed`，可用 `python tracking.py --requeue owner/name` 重开。
+- **配图可能缺失，但不再拖垮成文。** 深挖要扒的图都在 `raw.githubusercontent.com` 上，而这个域名**在 ECS 上连不通**（实测 5/5 被 reset；`api.github.com` 与 `opengraph.githubassets.com` 都正常）。以前任何一张图下载失败都会把整篇作废（连败三天、每轮还推一条告警），现在改成**单张失败就跳过**，一张都没成时回退到仓库卡片。验证：`python feature_article.py --selftest`（离线）。
 
 ## License
 

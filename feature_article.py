@@ -18,6 +18,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import sys
 import urllib.parse
 import urllib.request
@@ -165,15 +166,40 @@ def collect_images(repo, readme, token, limit=6):
     return imgs[:limit]
 
 
-def download(url, dest):
+def download(url, dest, timeout=20, tries=2):
+    """下载到本地。超时和重试都比正文请求短——配图不值得等那么久。"""
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return dest
     req = urllib.request.Request(url)
     req.add_header("User-Agent", "gh-feature")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with netutil.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+    with netutil.urlopen(req, timeout=timeout, tries=tries) as r, open(dest, "wb") as f:
         f.write(r.read())
     return dest
+
+
+def fetch_images(images, slug, full_name):
+    """逐张下载配图；单张失败就跳过，一张都没成时回退到仓库卡片。
+
+    配图只是配菜：raw.githubusercontent.com 在部分网络会被 reset
+    （ECS 实测连不上，而 api.github.com 与 opengraph.githubassets.com 正常）。
+    以前任何一张图下载失败都会把整篇几千字的文章一起作废。
+    """
+    kept = []
+    for i, im in enumerate(images, 1):
+        ext = os.path.splitext(im["url"].split("?")[0])[1] or ".png"
+        try:
+            im["local"] = download(im["url"], os.path.join(IMG_DIR, slug, f"img{i}{ext}"))
+            kept.append(im)
+        except Exception as e:
+            print(f"  图{i} 下载失败，跳过（{type(e).__name__}）：{im['url'][:80]}")
+    if not kept:
+        card = {"alt": f"{full_name} 仓库卡片",
+                "url": f"https://opengraph.githubassets.com/1/{full_name}"}
+        card["local"] = download(card["url"], os.path.join(IMG_DIR, slug, "repo-card.png"))
+        kept = [card]
+        print("  配图全部下载失败，回退到仓库卡片")
+    return kept
 
 
 def build_prompt(style, repo, readme, images):
@@ -274,6 +300,45 @@ def choose(token, conn, args):
     return name, reason, tracking.claim_named(conn, name)
 
 
+def _selftest():
+    """离线自检：配图下载容错。（这个缺陷曾让深挖线连败三天、每轮推一条告警。）"""
+    orig = download
+
+    def stub(fail_on):
+        def _dl(url, dest, **kw):
+            if fail_on in url:
+                raise RuntimeError("simulated connection reset")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n")
+            return dest
+        return _dl
+
+    bad = "https://raw.githubusercontent.com/x/bad.png"
+
+    def run(images, fail_on):
+        globals()["download"] = stub(fail_on)
+        try:
+            return fetch_images(images, "_selftest", "owner/repo")
+        finally:
+            globals()["download"] = orig
+
+    try:
+        # 一张坏一张好：坏的跳过，好的留下，不该回退
+        kept = run([{"alt": "bad", "url": bad},
+                    {"alt": "good", "url": "https://raw.githubusercontent.com/x/good.png"}],
+                   "/x/bad.png")
+        assert [k["alt"] for k in kept] == ["good"], kept
+
+        # 全坏：回退到 opengraph 仓库卡片
+        kept = run([{"alt": "a", "url": bad}], "raw.githubusercontent.com")
+        assert len(kept) == 1 and "opengraph.githubassets.com/1/owner/repo" in kept[0]["url"], kept
+        assert os.path.exists(kept[0]["local"]), kept
+    finally:
+        shutil.rmtree(os.path.join(IMG_DIR, "_selftest"), ignore_errors=True)
+    print("feature_article selftest ok")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", help="指定 owner/name；不指定则自动选题")
@@ -285,7 +350,12 @@ def main():
     ap.add_argument("--no-from-db", dest="from_db", action="store_false",
                     help="忽略深挖队列，直接找新项目")
     ap.add_argument("--db", default=tracking.DEFAULT_DB)
+    ap.add_argument("--selftest", action="store_true", help="离线自检，不联网")
     args = ap.parse_args()
+
+    if args.selftest:
+        _selftest()
+        return
 
     if not os.path.exists(STYLE_PATH):
         sys.exit(f"缺少风格文档：{STYLE_PATH}")
@@ -333,10 +403,8 @@ def main():
     slug = full_name.replace("/", "_")
     success = False
     try:
-        for i, im in enumerate(images, 1):
-            ext = os.path.splitext(im["url"].split("?")[0])[1] or ".png"
-            im["local"] = download(im["url"], os.path.join(IMG_DIR, slug, f"img{i}{ext}"))
-        print(f"配图已存到 {os.path.join(IMG_DIR, slug)}")
+        images = fetch_images(images, slug, full_name)
+        print(f"配图已存到 {os.path.join(IMG_DIR, slug)}（{len(images)} 张）")
 
         print("调用模型生成文章…")
         md = ga.chat([{"role": "system", "content": "你是资深科技公众号主笔，文风克制、重证据。"},
