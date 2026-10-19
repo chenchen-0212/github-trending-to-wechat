@@ -7,6 +7,7 @@
 
 规则：
   - 连续上榜满 3 天 → 第 4 天起不再详写，降为一行简报（streak >= 4）
+  - 上榜第 4~7 天为简报；第 8 天起不再进文章，只留在库里延续连续天数（streak >= 8）
   - 连续上榜满 5 天 → 值得深挖，入队（streak >= 5）
   - streak 按「上一次实际记录过的日期」链式 +1：某天没跑流水线不会断；
     跑过但项目掉出文章 → 重置为 1
@@ -27,6 +28,8 @@ from datetime import datetime, timezone
 
 DEFAULT_DB = os.path.join("data", "tracking.db")
 BRIEF_FROM_STREAK = 4      # 连续第 4 天起转一行简报
+BRIEF_DAYS_LIMIT = 4       # 简报最多挂 4 天
+DROP_FROM_STREAK = BRIEF_FROM_STREAK + BRIEF_DAYS_LIMIT   # 第 8 天起不再进文章
 DEEPDIVE_FROM_STREAK = 5   # 连续满 5 天 → 值得深挖
 MAX_ATTEMPTS = 3           # 深挖失败重试上限，超过转 failed
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -127,7 +130,9 @@ def plan_day(conn, date, ranked, top_n=10):
             continue
         seen.add(name)
         st = prev.get(name, 0) + 1
-        if st >= BRIEF_FROM_STREAK:
+        if st >= DROP_FROM_STREAK:
+            role = "dropped"
+        elif st >= BRIEF_FROM_STREAK:
             role = "brief"
         else:
             if details >= top_n:              # 详写收满，后面不再看
@@ -150,7 +155,8 @@ def plan_day(conn, date, ranked, top_n=10):
     summary = {
         "details": details,
         "briefs": sum(1 for e in entries if e["role"] == "brief"),
-        "total": len(entries),
+        "dropped": sum(1 for e in entries if e["role"] == "dropped"),
+        "total": sum(1 for e in entries if e["role"] != "dropped"),
         "short": details < top_n,
         "prev_date": prev_date,
     }
@@ -556,6 +562,19 @@ def selftest():
     assert full_name_from_article(tmp2, "my_org_tool") == "my_org/tool"
     os.unlink(tmp)
     os.unlink(tmp2)
+
+    # 12) 上榜第 4~7 天转简报，第 8 天起不再进文章；库里还记，第二天不会重置回详写
+    c = fresh()
+    for d in range(1, 9):
+        date = f"2026-05-{d:02d}"
+        entries, summary = plan_day(c, date, ranked(1))
+        want = ("dropped" if d >= DROP_FROM_STREAK
+                else "brief" if d >= BRIEF_FROM_STREAK else "detail")
+        assert entries[0]["role"] == want and entries[0]["streak"] == d, (d, entries[0])
+        assert summary["total"] == (0 if want == "dropped" else 1), summary
+        record_day(c, date, entries)
+    entries, _ = plan_day(c, "2026-05-09", ranked(1))
+    assert entries[0]["role"] == "dropped" and entries[0]["streak"] == 9, entries[0]
 
     print("tracking selftest ok")
 

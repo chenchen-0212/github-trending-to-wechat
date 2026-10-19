@@ -3,6 +3,7 @@
 
 规则（详见 tracking.py）：
   - 连续上榜满 3 天 → 第 4 天起降为一行简报（不写正文、不配图）
+  - 简报最多挂 4 天 → 第 8 天起不再收录（库里继续记，避免第二天重新被详写）
   - 那天还有它，榜单项目数就 +1：从第 11 名起往后补，直到凑满 10 篇详写
   - 连续满 5 天 → 入深挖队列
 
@@ -43,15 +44,19 @@ def plan(db, date, ranked, top, dry_run):
     conn = tracking.connect(db)
     tracking.init_db(conn)
     entries, summary = tracking.plan_day(conn, date, ranked, top_n=top)
-    if entries and not summary["details"]:
+    # dropped 只落库不上文章：断了库里的连续天数，第二天它又会变回 streak 1 被详写
+    live = [e for e in entries if e["role"] != "dropped"]
+    for i, e in enumerate(live, 1):
+        e["index"] = i
+    if live and not summary["details"]:
         # 极端情况：当年榜单全是霸榜项目。至少留 1 篇详写，否则文章没有封面图发不出去。
-        entries[0]["role"] = "detail"
+        live[0]["role"] = "detail"
         summary["details"], summary["briefs"] = 1, summary["briefs"] - 1
         summary["short"] = False
     if dry_run:
-        return entries, summary, []
+        return live, summary, []
     tracking.record_day(conn, date, entries)
-    return entries, summary, tracking.enqueue_streak5(conn, date)
+    return live, summary, tracking.enqueue_streak5(conn, date)
 
 
 def main():
@@ -95,7 +100,8 @@ def main():
         for e in entries:
             print(f"  {e['index']:02d} [{'简报' if e['role'] == 'brief' else '详写'}]"
                   f" 名次{e['rank']:>2} 连续{e['streak']}天  {e['full_name']}")
-        print(f"合计 {summary['total']} 项（详写 {summary['details']} + 简报 {summary['briefs']}）")
+        print(f"合计 {summary['total']} 项（详写 {summary['details']} + 简报 {summary['briefs']}）"
+              + (f"，另有 {summary['dropped']} 项简报满 4 天已停更" if summary.get("dropped") else ""))
         return
 
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -105,7 +111,8 @@ def main():
                   ensure_ascii=False, indent=1)
     print(f"已记录 {summary['total']} 个上榜项目；详写 {summary['details']} 篇"
           f" + 霸榜简报 {summary['briefs']} 篇"
-          + ("（榜单不足，未凑满 10 篇）" if summary["short"] else ""))
+          + ("（榜单不足，未凑满 10 篇）" if summary["short"] else "")
+          + (f"；{summary['dropped']} 项简报满 4 天，本期起停更" if summary.get("dropped") else ""))
     if added:
         print(f"新入深挖队列 {len(added)} 个: {', '.join(added)}")
     print(f"已写入: {out}")

@@ -31,7 +31,7 @@ description: 采集 GitHub 增长热榜，用大模型生成公众号风格中�
 | 步骤 | 脚本 | 做什么 | 产出 |
 |---|---|---|---|
 | 1/5 | `fetch_and_rank.py` | 拉 GitHub 候选（默认最近 30 天新建、Star>50），用昨日快照算 **Star 增量** | `data/daily/<日期>.md` `data/daily/<日期>.json` |
-| 2/5 | `select_daily.py` | 记榜入库、算**连续上榜天数**；连续满 3 天的转一行简报，第 11 名起补满 10 篇详写 | `data/daily/<日期>.selected.json` + `data/tracking.db` |
+| 2/5 | `select_daily.py` | 记榜入库、算**连续上榜天数**；连续满 3 天的转一行简报，简报满 4 天停更，第 11 名起补满 10 篇详写 | `data/daily/<日期>.selected.json` + `data/tracking.db` |
 | 3/5 | `generate_article.py` | 大模型按公众号风格写中文文案（简报项只写一行卖点） | `data/articles/<日期>.md` |
 | 4/5 | `optimize_title.py` | 生成 6 个候选标题选优；有本号历史阅读数据时并入参考 | 就地改写文章首行标题 |
 | 5/5 | `wechat_publish.py` | 逐图下载 → `uploadimg` 换微信托管 URL → 转内联样式 HTML → `draft/add` | 公众号草稿 |
@@ -100,7 +100,7 @@ python feature_article.py --upload            # 生成后直接发到公众号�
 4. **依赖固定出口 IP。** IP 变了要在公众号后台重加白名单。
 5. **数据统计接口不可用。** `datacube/*`（文章阅读量、用户分析等）在个人未认证号上同样返回 `48001`，拿不到阅读数据。
 6. **追踪库是运行态。** `data/tracking.db` 在被忽略的 `data/` 下，**不随代码部署**；生产那份在运行机器上，与开发机互相独立。丢了用 `python tracking.py --backfill` 重建。
-7. **连续上榜按「实际记录过的天」算。** 日期口径 UTC；某天流水线没跑不会断连，跑过但项目掉出文章才重置为 1。满 3 天（第 4 天起）转一行简报，满 5 天入深挖队列。
+7. **连续上榜按「实际记录过的天」算。** 日期口径 UTC；某天流水线没跑不会断连，跑过但项目掉出文章才重置为 1。满 3 天（第 4 天起）转一行简报，简报满 4 天不再收录（库里仍记），满 5 天入深挖队列。
 8. **两个 cron 会同时开库。** 日报 08:00 与深挖（每 5 分钟检查）都会读写 `tracking.db`；`run_feature.sh` 的 `flock` 只防自己，跨任务并发靠 SQLite 的 `journal_mode=WAL` + `busy_timeout=5000` 兜底。
 
 ## 定时执行
