@@ -91,12 +91,14 @@ def build_prompt(old_title, topics, hist, total):
         "",
         "请给出 6 个候选标题，并选出最好的一个。要求：",
         "- 前 4 个分别套用公式 1~4 各一个，剩下 2 个可组合两种公式；优先用本文项目里真实出现的数字。",
+        "- 每个候选都标上它用的公式号（1~4，组合写最小的那个）。",
+        "- best 只能从公式 2（痛点+解决方案）或公式 4（对比+反差）的候选里挑：这两类最容易被点开，不要选只报数量的那种。",
         "- 每条候选都用上面的总结自检：能不能看出「这跟我有关」和「看完我有什么收获」，缺一个就重写。",
         "- 中文，不超过 24 字；口语化、有钩子，但不夸大、不做标题党。",
         f"- 要写数量就写 {total}（本文实际篇数，详写和霸榜简报都算），写别的数字直接作废。",
         "- 其余数字只能来自给定的项目数据，不许编；反差只能来自项目本身的事实。",
         "- 保留「GitHub / 开源」等核心信息，让人一眼知道是什么。",
-        "- 只返回 JSON：{\"candidates\":[\"...\"],\"best\":\"...\"}，不要多余文字。",
+        "- 只返回 JSON：{\"candidates\":[{\"formula\":1,\"title\":\"...\"}],\"best\":\"...\"}，不要多余文字。",
     ]
     return "\n".join(parts)
 
@@ -144,12 +146,23 @@ def main():
     obj = parse_obj(ga.chat([{"role": "system", "content": SYS},
                              {"role": "user", "content": build_prompt(old_title, topics, hist, total)}]))
     best = (obj.get("best") or old_title).strip()
-    cands = [c for c in (obj.get("candidates") or []) if isinstance(c, str)]
+    cands = []                               # [(公式号, 标题)]
+    for c in obj.get("candidates") or []:
+        if isinstance(c, dict) and c.get("title"):
+            cands.append((c.get("formula"), str(c["title"]).strip()))
+        elif isinstance(c, str):             # 模型偶尔退回纯字符串数组
+            cands.append((None, c.strip()))
     if not count_ok(best, total):            # 模型把篇数写岔了，换个没写错的候选
-        alt = next((c for c in cands if count_ok(c, total)), "")
+        alt = next((t for _, t in cands if count_ok(t, total)), "")
         print(f"篇数应为 {total}，best 不符，改选: {alt or '（无合格候选，保留原标题）'}")
         best = alt or old_title
-    print("候选:", obj.get("candidates"))
+    f_of = {t: f for f, t in cands}
+    if f_of.get(best) not in (2, 4):         # best 只能是痛点类或对比类
+        alt = next((t for f, t in cands if f in (2, 4) and count_ok(t, total)), "")
+        if alt and alt != best:
+            print(f"best 用的是公式 {f_of.get(best)}，按规则改选公式 {f_of[alt]} 的候选: {alt}")
+            best = alt
+    print("候选:", [f"[{f}] {t}" if f else t for f, t in cands])
     print("原标题:", old_title)
     print("新标题:", best)
 
