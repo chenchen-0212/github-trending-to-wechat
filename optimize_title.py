@@ -15,6 +15,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -71,8 +72,14 @@ def own_top_titles(n=5, days=7):
     return [t for t, _ in sorted(reads.items(), key=lambda kv: kv[1], reverse=True)][:n]
 
 
-def build_prompt(old_title, topics, hist):
-    parts = [f"当前标题：{old_title}", "", "本文涉及的 10 个项目：", topics, ""]
+def count_ok(title, total):
+    """标题里若写了项目数量（N 个/篇/款），必须正好等于本文实际篇数。"""
+    return all(int(m.group(1)) == total
+               for m in re.finditer(r"(\d{1,3})\s*(?:个|篇|款)", title))
+
+
+def build_prompt(old_title, topics, hist, total):
+    parts = [f"当前标题：{old_title}", "", f"本文一共 {total} 个项目：", topics, ""]
     if hist:
         parts += ["本号历史高阅读标题（按阅读量排序，参考其风格，不要照抄）："]
         parts += [f"- {t}" for t in hist]
@@ -86,7 +93,8 @@ def build_prompt(old_title, topics, hist):
         "- 前 4 个分别套用公式 1~4 各一个，剩下 2 个可组合两种公式；优先用本文项目里真实出现的数字。",
         "- 每条候选都用上面的总结自检：能不能看出「这跟我有关」和「看完我有什么收获」，缺一个就重写。",
         "- 中文，不超过 24 字；口语化、有钩子，但不夸大、不做标题党。",
-        "- 数字只能来自给定的项目数据，不许编；反差只能来自项目本身的事实。",
+        f"- 要写数量就写 {total}（本文实际篇数，详写和霸榜简报都算），写别的数字直接作废。",
+        "- 其余数字只能来自给定的项目数据，不许编；反差只能来自项目本身的事实。",
         "- 保留「GitHub / 开源」等核心信息，让人一眼知道是什么。",
         "- 只返回 JSON：{\"candidates\":[\"...\"],\"best\":\"...\"}，不要多余文字。",
     ]
@@ -108,16 +116,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--article", default=os.path.join("data", "articles", today + ".md"))
     ap.add_argument("--daily", default=os.path.join("data", "daily", today + ".json"))
+    ap.add_argument("--selected", default=os.path.join("data", "daily", today + ".selected.json"))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     if not os.path.exists(args.article):
         sys.exit(f"找不到文章文件：{args.article}\n先跑 generate_article.py。")
-    lines = open(args.article, encoding="utf-8").read().splitlines()
+    art = open(args.article, encoding="utf-8").read()
+    lines = art.splitlines()
     old_title = lines[0].lstrip("#").strip()
+    # 篇数以成稿为准（**01** **02** … 标记数），别用榜单文件的行数
+    total = len(re.findall(r"^\*\*\d+\*\*$", art, re.M)) or 10
 
     topics = ""
-    if os.path.exists(args.daily):
+    if os.path.exists(args.selected):        # 用当天真正入选的项目，和成稿对得上
+        items = json.load(open(args.selected, encoding="utf-8")).get("items") or []
+        if items:
+            topics = "\n".join(f"- {r['full_name']}: {(r.get('description') or '')[:60]}"
+                               for r in items)
+    if not topics and os.path.exists(args.daily):
         topics = "\n".join(f"- {r['full_name']}: {(r.get('description') or '')[:60]}"
                            for r in json.load(open(args.daily, encoding="utf-8")))
 
@@ -125,8 +142,13 @@ def main():
     print("历史参考标题:", hist or "（无：本号暂无已发文章数据，走纯大模型）")
 
     obj = parse_obj(ga.chat([{"role": "system", "content": SYS},
-                             {"role": "user", "content": build_prompt(old_title, topics, hist)}]))
+                             {"role": "user", "content": build_prompt(old_title, topics, hist, total)}]))
     best = (obj.get("best") or old_title).strip()
+    cands = [c for c in (obj.get("candidates") or []) if isinstance(c, str)]
+    if not count_ok(best, total):            # 模型把篇数写岔了，换个没写错的候选
+        alt = next((c for c in cands if count_ok(c, total)), "")
+        print(f"篇数应为 {total}，best 不符，改选: {alt or '（无合格候选，保留原标题）'}")
+        best = alt or old_title
     print("候选:", obj.get("candidates"))
     print("原标题:", old_title)
     print("新标题:", best)
