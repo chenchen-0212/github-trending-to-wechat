@@ -16,6 +16,7 @@ role 为 brief 的项目是「连续上榜 3 天以上的霸榜项目」，只�
     python generate_article.py --stub     # 不联网，用假文案验证拼装
 """
 import argparse
+import ast
 import json
 import os
 import re
@@ -77,13 +78,32 @@ def call_llm(key, items):
 
 
 def parse_json_array(text):
+    """解析模型返回的 JSON 数组；对常见的模型手误做兜底。
+
+    依次尝试：原样 json.loads → 去掉尾随逗号 → ast.literal_eval(单引号/True/None)。
+    都不行才退出，并把原文片段打出来。
+    """
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\s*", "", text).rstrip("`").strip()
     i, j = text.find("["), text.rfind("]")
     if i < 0 or j < 0:
         sys.exit("模型未返回 JSON 数组:\n" + text[:500])
-    return json.loads(text[i:j + 1])
+    body = text[i:j + 1]
+    for candidate in (body, re.sub(r",\s*([}\]])", r"\1", body)):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, list):
+            return data
+    try:                        # 模型偶尔吐 Python 字面量：'key': 'v' / True / None
+        data = ast.literal_eval(body)
+        if isinstance(data, list):
+            return data
+    except (ValueError, SyntaxError):
+        pass
+    sys.exit("模型返回的 JSON 无法解析:\n" + body[:500])
 
 
 def assemble(items, copies):
