@@ -96,10 +96,7 @@ def load_style():
     if not os.path.exists(STYLE_PATH):
         print(f"提示: 没找到 {STYLE_PATH}，只用内置规则生成")
         return ""
-    return "
-
-【写作风格约束】
-" + open(STYLE_PATH, encoding="utf-8").read()
+    return "\n\n【写作风格约束】\n" + open(STYLE_PATH, encoding="utf-8").read()
 
 
 def build_instruction(focus):
