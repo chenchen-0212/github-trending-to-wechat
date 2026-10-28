@@ -145,15 +145,28 @@ def parse_json_array(text):
 
 
 def split_hook(hook):
-    """开头拆成短段；模型返回一整段时也照原样用。"""
-    return [p.strip() for p in re.split(r"\n+", (hook or "").strip()) if p.strip()]
+    """开头拆成短段。
+
+    模型常把「痛点句 + 结论句 + 路线句」写成一行，只按换行切会挤成一大坨，
+    丢掉短句独立成段的停顿感，所以句末标点也切一刀。
+    """
+    parts = []
+    for line in re.split(r"\n+", (hook or "").strip()):
+        line = line.strip()
+        if line:
+            parts += [s.strip() for s in re.findall(r"[^？。！!?]+[？。！!?]?", line) if s.strip()]
+    return parts
 
 
-def item_block(it, copy, with_image):
-    """一个详写条目：编号 → 标题 → 正文 → 涨星 → 地址 →（可选）配图。"""
+def item_block(it, copy, with_image, seq):
+    """一个详写条目：编号 → 标题 → 正文 → 涨星 → 地址 →（可选）配图。
+
+    seq 是重排后的连续号，不是 it["index"]——霸榜项目被压进速览表后，
+    原始序号会留出 02/03/04 这样的空档，读者以为漏了内容。
+    """
     name = it["full_name"]
     url = it.get("url") or f"https://github.com/{name}"
-    out = [f"**{it['index']:02d}**", "", f"**{name}：{copy.get('pitch', '')}**", ""]
+    out = [f"**{seq:02d}**", "", f"**{name}：{copy.get('pitch', '')}**", ""]
     for p in copy.get("paragraphs") or []:
         out += [p, ""]
     d = it.get("delta")
@@ -231,16 +244,19 @@ def assemble(items, copies, hook="", takeaway="", focus=3):
     else:                                    # 模型没给开头时退回旧写法，至少不失焦
         out += [f"今天 GitHub 上又冒出来一批新项目，挑 {n} 个带你看一遍。", ""]
 
+    seq = 0
     if head_set:
         out += [f"## 先说这 {len(head_set)} 个", ""]
         for it in items:
             if it["index"] in head_set:
-                out += item_block(it, copies[it["full_name"]], True)
+                seq += 1
+                out += item_block(it, copies[it["full_name"]], True, seq)
 
     if middle:
         out += ["## 这几个也值得看", ""]
         for it in middle:
-            out += item_block(it, copies[it["full_name"]], False)
+            seq += 1
+            out += item_block(it, copies[it["full_name"]], False, seq)
 
     if briefs:
         out += [f"## 另外 {len(briefs)} 个，一句话带过", "",
@@ -299,7 +315,7 @@ def main():
                                 "paragraphs": ([] if it.get("role") == "brief"
                                                else ["第一段示例介绍。", "第二段示例介绍。"])}
                   for it in items}
-        hook, takeaway = "示例开头一。\n示例开头二。", "示例结论。"
+        hook, takeaway = "示例开头一？示例开头二。示例开头三。", "示例结论。"
     else:
         key = (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
         if not key:
