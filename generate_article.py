@@ -65,7 +65,9 @@ INSTRUCTION = """为下面每个 GitHub 项目写中文介绍，另外给全文�
 - 只依据给到的信息写，不要编造未提供的功能。
 
 严格只返回 JSON 对象，不要 markdown 代码块、不要多余文字，格式：
-{{"hook":"...","takeaway":"...","items":[{{"index":1,"pitch":"...","paragraphs":["...","...","..."]}}]}}
+{{"hook":"...","takeaway":"...","items":{{"owner/repo":{{"pitch":"...","paragraphs":["...","...","..."]}}}}}}
+
+items 的 key 必须是项目列表里原样照抄的 full_name，一个字都不要改、不要重新编号。
 
 项目列表：
 """
@@ -175,11 +177,38 @@ def parse_payload(text):
                 data = json.loads(cand)
             except json.JSONDecodeError:
                 continue
-            if isinstance(data, dict) and isinstance(data.get("items"), list):
+            if isinstance(data, dict) and data.get("items"):
                 return (str(data.get("hook") or "").strip(),
                         str(data.get("takeaway") or "").strip(),
-                        data["items"])
+                        normalize_items(data["items"]))
     return "", "", parse_json_array(text)      # 退回旧格式：只有数组，没有开头和结论
+
+
+def normalize_items(items):
+    """统一成 [{full_name, pitch, paragraphs}]；模型返回 dict 时把 key 当 full_name。"""
+    if isinstance(items, dict):
+        return [dict(v, full_name=k) for k, v in items.items() if isinstance(v, dict)]
+    return [c for c in items if isinstance(c, dict)]
+
+
+def build_copies(raw, items):
+    """按仓库全名对齐文案。
+
+    曾经按 index 对齐，模型编号一漂移就把 A 的介绍贴到 B 名下（ub-mode 的正文
+    挂到 word-atlas 底下），所以现在只认 full_name，index 仅作旧格式兜底。
+    """
+    by_name = {c["full_name"]: c for c in raw if c.get("full_name")}
+    by_idx = {c["index"]: c for c in raw if c.get("index") is not None and not c.get("full_name")}
+    copies, missing = {}, []
+    for it in items:
+        c = by_name.get(it["full_name"]) or by_idx.get(it["index"])
+        if c is None:
+            missing.append(it["full_name"])
+            c = {"pitch": "", "paragraphs": []}
+        copies[it["full_name"]] = c
+    if missing:
+        print(f"⚠️ {len(missing)} 个项目没拿到文案: {', '.join(missing)}")
+    return copies
 
 
 def assemble(items, copies, hook="", takeaway="", focus=3):
@@ -206,18 +235,18 @@ def assemble(items, copies, hook="", takeaway="", focus=3):
         out += [f"## 先说这 {len(head_set)} 个", ""]
         for it in items:
             if it["index"] in head_set:
-                out += item_block(it, copies.get(it["index"], {"pitch": "", "paragraphs": []}), True)
+                out += item_block(it, copies[it["full_name"]], True)
 
     if middle:
         out += ["## 这几个也值得看", ""]
         for it in middle:
-            out += item_block(it, copies.get(it["index"], {"pitch": "", "paragraphs": []}), False)
+            out += item_block(it, copies[it["full_name"]], False)
 
     if briefs:
         out += [f"## 另外 {len(briefs)} 个，一句话带过", "",
                 "| 项目 | 一句话 | 今日新增 |", "| --- | --- | --- |"]
         for it in briefs:
-            c = copies.get(it["index"], {"pitch": ""})
+            c = copies[it["full_name"]]
             d = it.get("delta")
             star = f"+{d:,}" if d else f"{(it.get('stars') or 0):,}"
             streak = it.get("streak", 1)
@@ -266,7 +295,7 @@ def main():
         sys.exit("榜单为空(还没有增量数据)，无可生成内容。")
 
     if args.stub:
-        copies = {it["index"]: {"pitch": f"示例卖点 {it['index']}",
+        copies = {it["full_name"]: {"pitch": f"示例卖点 {it['index']}",
                                 "paragraphs": ([] if it.get("role") == "brief"
                                                else ["第一段示例介绍。", "第二段示例介绍。"])}
                   for it in items}
@@ -276,7 +305,7 @@ def main():
         if not key:
             sys.exit("缺少环境变量 LLM_API_KEY (或 DEEPSEEK_API_KEY)")
         hook, takeaway, raw = parse_payload(call_llm(key, items, args.focus))
-        copies = {c["index"]: c for c in raw}
+        copies = build_copies(raw, items)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     open(args.out, "w", encoding="utf-8").write(
