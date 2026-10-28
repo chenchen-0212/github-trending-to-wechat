@@ -22,11 +22,12 @@ except Exception:
 PY = sys.executable
 
 STEPS = [
-    ("1/5 采集榜单", [PY, "fetch_and_rank.py"]),
-    ("2/5 选榜·霸榜判定", [PY, "select_daily.py"]),
-    ("3/5 生成文章", [PY, "generate_article.py"]),
-    ("4/5 优化标题", [PY, "optimize_title.py"]),
-    ("5/5 建草稿", [PY, "wechat_publish.py"]),
+    ("1/6 采集榜单", [PY, "fetch_and_rank.py"]),
+    ("2/6 选榜·霸榜判定", [PY, "select_daily.py"]),
+    ("3/6 生成文章", [PY, "generate_article.py"]),
+    ("4/6 优化标题", [PY, "optimize_title.py"]),
+    ("5/6 完读率自检", [PY, "article_lint.py"]),
+    ("6/6 建草稿", [PY, "wechat_publish.py"]),
 ]
 
 
@@ -36,6 +37,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    # --skip-publish 只跳过建草稿，自检照跑（自检本身不联网）
     steps = STEPS[:-1] if args.skip_publish else STEPS
     if args.dry_run:
         for name, cmd in steps:

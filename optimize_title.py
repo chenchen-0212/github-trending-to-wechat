@@ -127,18 +127,20 @@ def main():
     art = open(args.article, encoding="utf-8").read()
     lines = art.splitlines()
     old_title = lines[0].lstrip("#").strip()
-    # 篇数以成稿为准（**01** **02** … 标记数），别用榜单文件的行数
-    total = len(re.findall(r"^\*\*\d+\*\*$", art, re.M)) or 10
-
-    topics = ""
+    # 篇数以入选项目为准：霸榜项目现在压进速览表，文章里不再有 **NN** 标记可数
+    total, topics = 0, ""
     if os.path.exists(args.selected):        # 用当天真正入选的项目，和成稿对得上
         items = json.load(open(args.selected, encoding="utf-8")).get("items") or []
         if items:
+            total = len(items)
             topics = "\n".join(f"- {r['full_name']}: {(r.get('description') or '')[:60]}"
                                for r in items)
     if not topics and os.path.exists(args.daily):
+        ranked = json.load(open(args.daily, encoding="utf-8"))
+        total = total or len(ranked)
         topics = "\n".join(f"- {r['full_name']}: {(r.get('description') or '')[:60]}"
-                           for r in json.load(open(args.daily, encoding="utf-8")))
+                           for r in ranked)
+    total = total or len(re.findall(r"^\*\*\d+\*\*$", art, re.M)) or 10
 
     hist = own_top_titles()
     print("历史参考标题:", hist or "（无：本号暂无已发文章数据，走纯大模型）")

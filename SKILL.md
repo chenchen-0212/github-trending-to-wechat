@@ -5,7 +5,7 @@ description: 采集 GitHub 增长热榜，用大模型生成公众号风格中�
 
 # GitHub 增长热榜 → 微信公众号
 
-把「采集 → 选榜·霸榜判定 → 生成文章 → 优化标题 → 建草稿」串成一条每日可定时执行的流水线。
+把「采集 → 选榜·霸榜判定 → 生成文章 → 优化标题 → 完读率自检 → 建草稿」串成一条每日可定时执行的流水线。
 **零第三方依赖**，只用 Python 标准库。
 
 ## 前置条件
@@ -30,17 +30,18 @@ description: 采集 GitHub 增长热榜，用大模型生成公众号风格中�
 
 | 步骤 | 脚本 | 做什么 | 产出 |
 |---|---|---|---|
-| 1/5 | `fetch_and_rank.py` | 拉 GitHub 候选（默认最近 30 天新建、Star>50），用昨日快照算 **Star 增量** | `data/daily/<日期>.md` `data/daily/<日期>.json` |
-| 2/5 | `select_daily.py` | 记榜入库、算**连续上榜天数**；第 2 次上榜的转一行简报，简报满 2 次（第 4 次起）停更，第 11 名起补满 10 篇详写 | `data/daily/<日期>.selected.json` + `data/tracking.db` |
-| 3/5 | `generate_article.py` | 大模型按公众号风格写中文文案（简报项只写一行卖点） | `data/articles/<日期>.md` |
-| 4/5 | `optimize_title.py` | 生成 6 个候选标题选优；有本号历史阅读数据时并入参考 | 就地改写文章首行标题 |
-| 5/5 | `wechat_publish.py` | 逐图下载 → `uploadimg` 换微信托管 URL → 转内联样式 HTML → `draft/add` | 公众号草稿 |
+| 1/6 | `fetch_and_rank.py` | 拉 GitHub 候选（默认最近 30 天新建、Star>50），用昨日快照算 **Star 增量** | `data/daily/<日期>.md` `data/daily/<日期>.json` |
+| 2/6 | `select_daily.py` | 记榜入库、算**连续上榜天数**；第 2 次上榜的转一行简报，简报满 2 次（第 4 次起）停更，第 11 名起补满 10 篇详写 | `data/daily/<日期>.selected.json` + `data/tracking.db` |
+| 3/6 | `generate_article.py` | 大模型按 `ARTICLE_STYLE_DAILY.md` 写：前 3 个写透 + 中间降级 + 开头钩子 + 可转发结论（简报项压成速览表一行） | `data/articles/<日期>.md` |
+| 4/6 | `optimize_title.py` | 生成 6 个候选标题选优；有本号历史阅读数据时并入参考 | 就地改写文章首行标题 |
+| 5/6 | `article_lint.py` | 结构/字数/断点自检，硬伤直接中止（不让低完读率的稿子进草稿箱） | 退出码 1 = 不发 |
+| 6/6 | `wechat_publish.py` | 逐图下载 → `uploadimg` 换微信托管 URL → 转内联样式 HTML → `draft/add` | 公众号草稿 |
 
 一键执行：
 
 ```bash
 python run_daily.py              # 全流程
-python run_daily.py --skip-publish   # 不建草稿，只跑到优化标题
+python run_daily.py --skip-publish   # 不建草稿，跑到自检为止
 python run_daily.py --dry-run        # 只打印将要执行什么
 ```
 

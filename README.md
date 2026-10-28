@@ -20,10 +20,11 @@ flowchart TD
     B4 --> B5[记入 data/tracking.db / 算连续上榜天数]
     B5 --> B6[第 2 次上榜转一行简报<br/>第 4 次起停更<br/>第 11 名起补满 10 篇详写]
     B6 --> C[3. generate_article.py]
-    C --> C1[大模型写公众号风格中文文案]
+    C -->     C1[大模型写 3 个重点 + 其余降级<br/>带开头钩子与可转发结论]
     C1 --> D[4. optimize_title.py]
     D --> D1[生成候选标题选优]
-    D1 --> E[5. wechat_publish.py]
+    D1 --> D2[5. article_lint.py<br/>结构/字数不过关就中止]
+    D2 --> E[6. wechat_publish.py]
     E --> E1[配图 download → uploadimg 换微信URL]
     E1 --> E2[转内联样式 HTML → draft/add]
     E2 --> F[公众号草稿箱]
@@ -59,28 +60,34 @@ Windows PowerShell 里用 `$env:GITHUB_TOKEN="..."`。
 | `wechat_publish.py` | 转 HTML + 传图 + 建草稿 |
 | `wechat_test.py` | 微信凭证/权限自检（含 `--selftest` 离线自检） |
 | `tracking.py` | SQLite 追踪库：上榜记录 + 连续天数 + 深挖队列（stdlib `sqlite3`） |
-| `run_daily.py` | 一键编排上面五步 |
+| `article_lint.py` | 成稿自检：结构/字数/断点不过关就不建草稿（完读率闸门） |
+| `run_daily.py` | 一键编排上面六步 |
 | `notify.py` | 失败告警：把失败的步骤和报错推送到 Server酱（零依赖） |
 | `netutil.py` | 带退避重试的 HTTP 调用，专治间歇性网络抖动 |
 | `feature_article.py` | 单项目深挖：优先消费深挖队列 → 扒 README 图 → 按风格文档写文章 |
 | `run_feature.sh` | 深挖的 72 小时时间闸（cron 每 5 分钟调用，满 72h 才真跑） |
 | `ARTICLE_STYLE.md` | 「单项目深挖」文章风格约束（AI 生成时引用） |
+| `ARTICLE_STYLE_DAILY.md` | 「每日榜单文」风格约束：3 个重点 + 其余降级、开头钩子、断点、字数 |
 | `SKILL.md` | 作为 AI Agent Skill 使用的说明 |
 
 ## 产出示例
 
-`data/articles/<日期>.md`（详写条目 + 霸榜简报条目）：
+`data/articles/<日期>.md`（3 个重点 + 中间简写 + 霸榜速览表）：
 
 ````markdown
 # 今天 GitHub 上 12 个顶顶顶的开源项目。
+
+（开头钩子：痛点场景 → 点名最值得看的 3 个 → 先说这 3 个，剩下在文末）
+
+## 先说这 3 个
 
 **01**
 
 **owner/repo：一句话卖点**
 
-它是什么……
-怎么用，比如你可以……
-适合谁 / 注意事项。
+这个项目针对的那个具体麻烦……
+它怎么做到，比如你可以……
+什么人不适合、有什么坑。
 
 今日新增约 320 Star。
 
@@ -90,16 +97,33 @@ Windows PowerShell 里用 `$env:GITHUB_TOKEN="..."`。
 
 ![owner/repo](https://opengraph.githubassets.com/1/owner/repo)
 
+**02** … **03**（同样 3 段 + 配图）
+
+## 这几个也值得看
+
 **04**
 
-**hot/repo：连续霸榜的卖点（连续上榜 2 天）**
+**owner/repo：一句话卖点**
 
-今日新增约 120 Star。
+它是什么、适合谁（1~2 段，不配图）。
 
-```
-开源地址：https://github.com/hot/repo
-```
+今日新增约 88 Star。
+
+## 另外 3 个，一句话带过
+
+| 项目 | 一句话 | 今日新增 |
+| --- | --- | --- |
+| hot/repo（连榜 2 天）| 连续霸榜的卖点 | +120 |
+
+> 一句能被截图转发到群里的判断。
+
+**点击下方卡片，关注我们**
 ````
+
+> 为什么长这样：本号实测完读率中位数 26%，且**不管阅读量是 16 还是 584 都卡在 23~32%**——
+> 瓶颈不在选题，在结构。所以规则是：前 3 个写透（读者知道重点在哪），中间降级，
+> 霸榜压成一行（读者看得到终点），全文控在 1800~2400 字，结尾留一句可转发的话。
+> `article_lint.py` 会在建草稿前把不合格的稿子拦下来。
 
 > 一个项目**第 2 次上榜起只保留这一行**——不写正文、不配图。这一行再挂 2 次后（即连续第 4 次上榜起）连这行也不再收录，只在追踪库里继续记连续次数。空出的篇幅由榜单**第 11 名起往后补**，保证当天仍有 10 篇详写，所以文章总数会变成 `10 + 霸榜数`。
 

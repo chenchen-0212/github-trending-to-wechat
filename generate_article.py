@@ -5,7 +5,10 @@
       没有时就退回 data/daily/<日期>.json 的前 N 名
 输出: data/articles/<日期>.md  (结构与 wechat_publish.py 期望一致)
 
-role 为 brief 的项目是「第 2 次上榜起的霸榜项目」，只写一行卖点，不写正文、不配图。
+写法规矩见 ARTICLE_STYLE_DAILY.md（3 个重点 + 其余降级 + 开头钩子 + 可转发结论），
+那份文件存在就拼进提示词；不存在则用内置规则。
+
+role 为 brief 的项目是「第 2 次上榜起的霸榜项目」，压成文末速览表的一行，不写正文、不配图。
 
 环境变量(OpenAI 兼容接口):
     LLM_API_KEY 或 DEEPSEEK_API_KEY   必需(二选一)
@@ -32,17 +35,37 @@ MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 
 SYSTEM = "你是公众号「逛逛GitHub」的编辑，专门把 GitHub 新项目写成通俗易懂的中文介绍。"
 
-INSTRUCTION = """为下面每个 GitHub 项目写中文介绍。每个项目带一个 role 字段，按它区分写法：
-- role 为 "detail"：给一个「一句话卖点」(不超过 20 字，点出它解决什么问题)，以及 2~4 段短介绍。
-- role 为 "brief"：只给一个「一句话卖点」(不超过 20 字)，paragraphs 必须是空数组 []。
+STYLE_PATH = "ARTICLE_STYLE_DAILY.md"
+
+INSTRUCTION = """为下面每个 GitHub 项目写中文介绍，另外给全文写一个开头和一句结尾。
+
+【结构：{focus} 个重点 + 其余降级】
+列表按顺序排列，前 {focus} 个 role=detail 的项目是重点，必须写透；之后的 detail 写短介绍。
+- 前 {focus} 个 detail（重点）：pitch 是一句话卖点（≤20 字，点出它替读者解决了什么麻烦），
+  paragraphs 固定 3 段，顺序不能变：
+  ① 这个项目针对的那个具体麻烦（写场景，不写形容词）
+  ② 它怎么做到 / 你怎么用，用「比如，」举一个能看见画面的例子
+  ③ 什么人不适合、有什么坑（安全、授权、平台限制、上手门槛）
+- 第 {focus_plus} 个 detail 起（普通）：pitch 同上，paragraphs 1~2 段，只讲「它是什么、适合谁」，
+  不展开用法。
+- role 为 "brief"：只要一个 pitch（≤18 字），paragraphs 必须是空数组 []。
+
+【开头 hook】
+2~3 个短句，合计不超过 100 字，必须含：一句能让人对号入座的场景或痛点；
+一句明确结论（这几 N 个里哪几个最值得看，点名）；一句路线指引（先说前 {focus} 个，其余在文末速览）。
+禁止「今天又冒出来一批新项目」「挑 N 个带你看一遍」这类开场。
+
+【结尾 takeaway】
+一句话，不超过 30 字，要能被读者截图转发到群里：有判断、有反差，
+不能是「快去试试」。例：租卡比赌一张显卡便宜。
+
 其余要求：
 - 每段一句话，口语化，第二人称「你」，说人话，不用 emoji，不堆营销词。
-- detail 项目至少一段讲「怎么用」，可用「比如，」举例；再说明适合谁或注意事项。
 - 安全/破解类项目必须加合规或授权提醒。
 - 只依据给到的信息写，不要编造未提供的功能。
 
-严格只返回 JSON 数组，不要 markdown 代码块、不要多余文字，格式：
-[{"index":1,"pitch":"...","paragraphs":["...","..."]}, {"index":4,"pitch":"...","paragraphs":[]}]
+严格只返回 JSON 对象，不要 markdown 代码块、不要多余文字，格式：
+{{"hook":"...","takeaway":"...","items":[{{"index":1,"pitch":"...","paragraphs":["...","...","..."]}}]}}
 
 项目列表：
 """
@@ -68,13 +91,29 @@ def chat(messages, key=None, temperature=0.7):
     return data["choices"][0]["message"]["content"]
 
 
-def call_llm(key, items):
+def load_style():
+    """读 ARTICLE_STYLE_DAILY.md；没有就只用内置规则，不让缺文档拖垮日报。"""
+    if not os.path.exists(STYLE_PATH):
+        print(f"提示: 没找到 {STYLE_PATH}，只用内置规则生成")
+        return ""
+    return "
+
+【写作风格约束】
+" + open(STYLE_PATH, encoding="utf-8").read()
+
+
+def build_instruction(focus):
+    return INSTRUCTION.format(focus=focus, focus_plus=focus + 1)
+
+
+def call_llm(key, items, focus=3):
     slim = [{"index": it["index"], "role": it.get("role", "detail"),
              "full_name": it["full_name"], "description": it.get("description", ""),
              "stars": it.get("stars"), "delta": it.get("delta"),
              "language": it.get("language", "")} for it in items]
+    prompt = build_instruction(focus) + load_style() + json.dumps(slim, ensure_ascii=False)
     return chat([{"role": "system", "content": SYSTEM},
-                 {"role": "user", "content": INSTRUCTION + json.dumps(slim, ensure_ascii=False)}], key)
+                 {"role": "user", "content": prompt}], key)
 
 
 def parse_json_array(text):
@@ -106,28 +145,91 @@ def parse_json_array(text):
     sys.exit("模型返回的 JSON 无法解析:\n" + body[:500])
 
 
-def assemble(items, copies):
+def split_hook(hook):
+    """开头拆成短段；模型返回一整段时也照原样用。"""
+    return [p.strip() for p in re.split(r"\n+", (hook or "").strip()) if p.strip()]
+
+
+def item_block(it, copy, with_image):
+    """一个详写条目：编号 → 标题 → 正文 → 涨星 → 地址 →（可选）配图。"""
+    name = it["full_name"]
+    url = it.get("url") or f"https://github.com/{name}"
+    out = [f"**{it['index']:02d}**", "", f"**{name}：{copy.get('pitch', '')}**", ""]
+    for p in copy.get("paragraphs") or []:
+        out += [p, ""]
+    d = it.get("delta")
+    out.append(f"今日新增约 {d:,} Star。" if d else f"目前约 {(it.get('stars') or 0):,} Star。")
+    out += ["", "```", f"开源地址：{url}", "```", ""]
+    if with_image:
+        out += [f"![{name}](https://opengraph.githubassets.com/1/{name})", ""]
+    return out
+
+
+def parse_payload(text):
+    """解析模型返回的 {hook, takeaway, items}；退回旧格式(纯数组)也能用。"""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text).rstrip("`").strip()
+    i, j = text.find("{"), text.rfind("}")
+    if 0 <= i < j:
+        body = text[i:j + 1]
+        for cand in (body, re.sub(r",\s*([}\]])", r"\1", body)):
+            try:
+                data = json.loads(cand)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                return (str(data.get("hook") or "").strip(),
+                        str(data.get("takeaway") or "").strip(),
+                        data["items"])
+    return "", "", parse_json_array(text)      # 退回旧格式：只有数组，没有开头和结论
+
+
+def assemble(items, copies, hook="", takeaway="", focus=3):
+    """3 个重点写透 + 中间简写 + 霸榜压成速览表 + 一句可转发结论。
+
+    完读率靠的就是这个骨架：读者开头就知道终点在哪，中途每 300 字有小标题或表格断点，
+    结尾留一句能截图发群的话。字数目标 1800~2400。
+    """
     n = len(items)
-    out = [f"# 今天 GitHub 上 {n} 个顶顶顶的开源项目。", "",
-           f"今天 GitHub 上又冒出来一批新项目，挑 {n} 个带你看一遍。", ""]
-    for i, it in enumerate(items, 1):
-        c = copies.get(i, {"pitch": "", "paragraphs": []})
-        brief = it.get("role") == "brief"
-        name = it["full_name"]
-        url = it.get("url") or f"https://github.com/{name}"
-        head = f"{name}：{c.get('pitch', '')}"
-        out += [f"**{i:02d}**", ""]
-        if brief:                       # 霸榜项目：一行卖点 + 连续天数，不写正文不配图
-            out += [f"**{head}（连续上榜 {it.get('streak', 1)} 天）**", ""]
-        else:
-            out += [f"**{head}**", ""]
-            for p in c.get("paragraphs") or []:
-                out += [p, ""]
-        d = it.get("delta")
-        out.append(f"今日新增约 {d:,} Star。" if d else f"目前约 {(it.get('stars') or 0):,} Star。")
-        out += ["", "```", f"开源地址：{url}", "```", ""]
-        if not brief:
-            out += [f"![{name}](https://opengraph.githubassets.com/1/{name})", ""]
+    detail_idx = [it["index"] for it in items if it.get("role") != "brief"]
+    head_set = set(detail_idx[:focus])
+    middle = [it for it in items if it.get("role") != "brief" and it["index"] not in head_set]
+    briefs = [it for it in items if it.get("role") == "brief"]
+
+    out = [f"# 今天 GitHub 上 {n} 个顶顶顶的开源项目。", ""]
+    hook_paras = split_hook(hook)
+    if hook_paras:
+        for p in hook_paras:
+            out += [p, ""]
+    else:                                    # 模型没给开头时退回旧写法，至少不失焦
+        out += [f"今天 GitHub 上又冒出来一批新项目，挑 {n} 个带你看一遍。", ""]
+
+    if head_set:
+        out += [f"## 先说这 {len(head_set)} 个", ""]
+        for it in items:
+            if it["index"] in head_set:
+                out += item_block(it, copies.get(it["index"], {"pitch": "", "paragraphs": []}), True)
+
+    if middle:
+        out += ["## 这几个也值得看", ""]
+        for it in middle:
+            out += item_block(it, copies.get(it["index"], {"pitch": "", "paragraphs": []}), False)
+
+    if briefs:
+        out += [f"## 另外 {len(briefs)} 个，一句话带过", "",
+                "| 项目 | 一句话 | 今日新增 |", "| --- | --- | --- |"]
+        for it in briefs:
+            c = copies.get(it["index"], {"pitch": ""})
+            d = it.get("delta")
+            star = f"+{d:,}" if d else f"{(it.get('stars') or 0):,}"
+            streak = it.get("streak", 1)
+            out.append(f"| {it['full_name']}（连榜 {streak} 天）| {c.get('pitch', '')} | {star} |")
+        out.append("")
+
+    if takeaway.strip():
+        out += ["> " + takeaway.strip(), ""]
+
     out += ["**点击下方卡片，关注我们**", "",
             "每天为你整理 GitHub 上冒出来的新项目，不错过每一个值得看的开源作品。", ""]
     return "\n".join(out)
@@ -158,6 +260,7 @@ def main():
     ap.add_argument("--selected", default=os.path.join("data", "daily", today + ".selected.json"))
     ap.add_argument("--out", default=os.path.join("data", "articles", today + ".md"))
     ap.add_argument("--top", type=int, default=10)
+    ap.add_argument("--focus", type=int, default=3, help="重点写透的篇数(前 N 个详写项目)")
     ap.add_argument("--stub", action="store_true")
     args = ap.parse_args()
 
@@ -170,14 +273,17 @@ def main():
                                 "paragraphs": ([] if it.get("role") == "brief"
                                                else ["第一段示例介绍。", "第二段示例介绍。"])}
                   for it in items}
+        hook, takeaway = "示例开头一。\n示例开头二。", "示例结论。"
     else:
         key = (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
         if not key:
             sys.exit("缺少环境变量 LLM_API_KEY (或 DEEPSEEK_API_KEY)")
-        copies = {c["index"]: c for c in parse_json_array(call_llm(key, items))}
+        hook, takeaway, raw = parse_payload(call_llm(key, items, args.focus))
+        copies = {c["index"]: c for c in raw}
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    open(args.out, "w", encoding="utf-8").write(assemble(items, copies))
+    open(args.out, "w", encoding="utf-8").write(
+        assemble(items, copies, hook, takeaway, args.focus))
     print(f"已写入: {args.out}  ({len(items)} 个项目"
           f"，其中霸榜简报 {sum(1 for it in items if it.get('role') == 'brief')} 个)")
 
