@@ -2,8 +2,8 @@
 """每日第 2 步：落库当天榜单、判定霸榜，产出 <日期>.selected.json。
 
 规则（详见 tracking.py）：
-  - 连续上榜满 3 天 → 第 4 天起降为一行简报（不写正文、不配图）
-  - 简报最多挂 4 天 → 第 8 天起不再收录（库里继续记，避免第二天重新被详写）
+  - 第 2 次上榜起降为一行简报（不写正文、不配图）
+  - 简报最多挂 2 次 → 第 4 次上榜起不再收录（库里继续记，避免第二天重新被详写）
   - 那天还有它，榜单项目数就 +1：从第 11 名起往后补，直到凑满 10 篇详写
   - 连续满 5 天 → 入深挖队列
 
@@ -101,7 +101,7 @@ def main():
             print(f"  {e['index']:02d} [{'简报' if e['role'] == 'brief' else '详写'}]"
                   f" 名次{e['rank']:>2} 连续{e['streak']}天  {e['full_name']}")
         print(f"合计 {summary['total']} 项（详写 {summary['details']} + 简报 {summary['briefs']}）"
-              + (f"，另有 {summary['dropped']} 项简报满 4 天已停更" if summary.get("dropped") else ""))
+              + (f"，另有 {summary['dropped']} 项连续上榜满 4 次已停更" if summary.get("dropped") else ""))
         return
 
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -112,7 +112,7 @@ def main():
     print(f"已记录 {summary['total']} 个上榜项目；详写 {summary['details']} 篇"
           f" + 霸榜简报 {summary['briefs']} 篇"
           + ("（榜单不足，未凑满 10 篇）" if summary["short"] else "")
-          + (f"；{summary['dropped']} 项简报满 4 天，本期起停更" if summary.get("dropped") else ""))
+          + (f"；{summary['dropped']} 项连续上榜满 4 次，本期起停更" if summary.get("dropped") else ""))
     if added:
         print(f"新入深挖队列 {len(added)} 个: {', '.join(added)}")
     print(f"已写入: {out}")

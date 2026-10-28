@@ -5,7 +5,7 @@
       没有时就退回 data/daily/<日期>.json 的前 N 名
 输出: data/articles/<日期>.md  (结构与 wechat_publish.py 期望一致)
 
-role 为 brief 的项目是「连续上榜 3 天以上的霸榜项目」，只写一行卖点，不写正文、不配图。
+role 为 brief 的项目是「第 2 次上榜起的霸榜项目」，只写一行卖点，不写正文、不配图。
 
 环境变量(OpenAI 兼容接口):
     LLM_API_KEY 或 DEEPSEEK_API_KEY   必需(二选一)
