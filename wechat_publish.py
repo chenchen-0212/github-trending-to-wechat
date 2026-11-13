@@ -14,6 +14,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -25,26 +26,72 @@ IMG_DIR = os.path.join("examples", "images")
 def local_path_for(url):
     """把图片 URL 映射到本地缓存文件名(owner_repo.png)。"""
     slug = "_".join(url.rstrip("/").split("/")[-2:])
-    return os.path.join(IMG_DIR, slug + ".png")
+    return os.path.join(IMG_DIR, slug + ".jpg")
 
 
-def download_image(url):
-    """把图片下载到本地缓存，已存在则跳过；带 429 退避重试。返回本地路径。"""
+PROXY = "https://images.weserv.nl/?w=1080&output=jpg&q=80&url="
+
+
+def _fetch(url, path, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = r.read()
+    if len(data) < 1024:
+        raise OSError("图太小，可能是错误页")
+    open(path, "wb").write(data)
+
+
+def download_image(url, required=True):
+    """把图片下载到本地缓存，已存在则跳过；直连不行就走图片代理。
+
+    required=False 时下载失败返回 None（正文配图失败不该拖垮整篇文章），
+    required=True 仍抛错退出（封面图没有就建不了草稿）。
+    """
     path = local_path_for(url)
-    if os.path.exists(path) and open(path, "rb").read(8) == b"\x89PNG\r\n\x1a\n":
+    if os.path.exists(path) and os.path.getsize(path) > 1024:
         return path
     os.makedirs(IMG_DIR, exist_ok=True)
-    for attempt in range(1, 6):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                open(path, "wb").write(r.read())
+    for attempt in range(1, 4):
+        for target in (url, PROXY + urllib.parse.quote(url, safe="")):
+            try:
+                _fetch(target, path, timeout=45)
+                return path
+            except Exception:
+                continue
+        time.sleep(2 * attempt)
+    if required:
+        sys.exit(f"下载图片失败: {url}")
+    print("  ! 图片下载失败，已跳过: " + url[:80])
+    return None
+
+
+def make_placeholder(path=os.path.join(IMG_DIR, "_placeholder_cover.png"), w=900, h=383):
+    """纯 Python 生成纯色 PNG 当兜底封面（服务器没装 Pillow）。"""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + b"\x3a\x3a\x3a" * w for _ in range(h))
+
+    def chunk(tag, data):
+        body = struct.pack(">I", len(data)) + tag + data
+        return body + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw, 9))
+           + chunk(b"IEND", b""))
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    open(path, "wb").write(png)
+    print("  ! 已生成兜底封面: " + path)
+    return path
+
+
+def pick_cover(md):
+    """找一张能用的封面：按文章顺序试，全失败就用兜底图。"""
+    for url in re.findall(r"!\[.*?\]\((.*?)\)", md):
+        path = download_image(url, required=False)
+        if path:
             return path
-        except urllib.error.HTTPError as e:
-            time.sleep(10 * attempt if e.code == 429 else 2)
-        except Exception:
-            time.sleep(2)
-    sys.exit(f"下载图片失败: {url}")
+    return make_placeholder()
 
 
 def esc(s):
@@ -135,10 +182,13 @@ def build_html(token, md_text, dry_run):
             if dry_run:
                 wurl = "LOCAL:" + local_path_for(m.group(1))
             else:
-                local = download_image(m.group(1))
+                local = download_image(m.group(1), required=False)
+                if not local:
+                    continue
                 up = wt._upload(token, "media/uploadimg", local)
                 if "url" not in up:
-                    sys.exit(f"正文图上传失败 {local}: {up}")
+                    print("  ! 正文图上传失败，已跳过 " + local + ": " + str(up))
+                    continue
                 wurl = up["url"]
             body.append(f'<p style="{img_p}"><img src="{wurl}" '
                         f'style="max-width:100%;border-radius:6px;"/></p>')
@@ -187,10 +237,7 @@ def build_html(token, md_text, dry_run):
 def publish(token, md):
     """把文章 md 传成公众号草稿。返回 (media_id, title, html, digest)。"""
     title, html, digest = build_html(token, md, False)
-    m = re.search(r"!\[.*?\]\((.*?)\)", md)
-    if not m:
-        sys.exit("文章里没有任何图片，无法设置封面（公众号草稿必须有封面图）")
-    cover = download_image(m.group(1))
+    cover = pick_cover(md)
     mat = wt._upload(token, "material/add_material", cover, "&type=image")
     if "media_id" not in mat:
         sys.exit(f"封面图上传失败: {mat}")
@@ -204,6 +251,13 @@ def publish(token, md):
         "only_fans_can_comment": 0,
     }
     d = wt.add_draft(token, [article])
+    if "media_id" not in d and str(d.get("errcode")) == "53402":
+        # 53402 = 封面裁剪失败，换兜底封面再试一次
+        print("  ! 封面裁剪失败(53402)，换兜底封面重试")
+        mat2 = wt._upload(token, "material/add_material", make_placeholder(), "&type=image")
+        if "media_id" in mat2:
+            article["thumb_media_id"] = mat2["media_id"]
+            d = wt.add_draft(token, [article])
     if "media_id" not in d:
         sys.exit(f"建草稿失败: {d}")
     return d["media_id"], title, html, digest

@@ -43,6 +43,12 @@ BAD_IMG = ("shields.io", "badge", "badgen.net", "travis-ci", "codecov", "coveral
            "mipmap", "launcher", "xcassets", "drawable", "/res/", "splash",
            "/tests/", "/test/", "test_", "_test", "fixture", "sample_data", "dummy")
 IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+# README 里的图常走 github.com/<owner>/<repo>/assets/... 或 user-attachments，URL 没有扩展名
+GH_ASSET = re.compile(r"github\.com/(?:[^/]+/[^/]+/assets/|user-attachments/assets/)", re.I)
+# raw.githubusercontent.com 在这台 ECS 上连不通、资产大图又慢到超时：统一过一层图片代理
+PROXY = "https://images.weserv.nl/?w=1080&output=jpg&q=80&url="
+SLOW_HOST = re.compile(r"raw\.githubusercontent\.com|github\.com/(?:[^/]+/[^/]+/assets/|user-attachments/assets/)", re.I)
+
 HINT_GOOD = ("screenshot", "screen", "demo", "preview", "showcase", "example", "shot", "overview")
 
 
@@ -118,7 +124,7 @@ def extract_images(readme, repo):
             real = url
         else:
             real = f"https://raw.githubusercontent.com/{full}/{branch}/{url.lstrip('./')}"
-        if not re.search(r"\.(png|jpe?g|gif|webp)(\?|$)", real.lower()):
+        if not re.search(r"\.(png|jpe?g|gif|webp)(\?|$)", real.lower())                 and not GH_ASSET.search(real):
             continue
         if real in seen:
             continue
@@ -170,12 +176,23 @@ def download(url, dest, timeout=20, tries=2):
     """下载到本地。超时和重试都比正文请求短——配图不值得等那么久。"""
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return dest
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    alt = os.path.splitext(dest)[0] + ".jpg"
+    try:
+        if SLOW_HOST.search(url):        # 直连只会挂在慢速流上，直接换路
+            raise OSError("skip slow host")
+        _get_file(url, dest, timeout, tries)
+        return dest
+    except Exception:
+        _get_file(PROXY + urllib.parse.quote(url, safe=""), alt, 45, 2)
+        return alt
+
+
+def _get_file(url, dest, timeout, tries):
     req = urllib.request.Request(url)
     req.add_header("User-Agent", "gh-feature")
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
     with netutil.urlopen(req, timeout=timeout, tries=tries) as r, open(dest, "wb") as f:
         f.write(r.read())
-    return dest
 
 
 def fetch_images(images, slug, full_name):
@@ -229,7 +246,8 @@ def build_prompt(style, repo, readme, images):
         "2. **必须至少插入 2 张配图**（除非一张都没有）：在相关段落附近单独成行写 "
         "`![说明](图N)`，N 是上面配图编号，说明要写清「这张图让你看到什么」；不要写其它图片地址。\n"
         "3. 每个数字标「截至 <日期>」，没把握的写「以官方文档为准」，绝不编造。\n"
-        "4. 正文 2500–4000 字，短板至少 3 条且具体。"
+        "4. 正文 2200–3200 字，短板至少 3 条且具体。\n"
+        "5. 标题必须是「小故事 + 项目」两段式（40 到 50 字，45 字上下）；正文开头 200 字内必须是一个具体的小故事，并在第 4 段之内转场到项目。"
     )
 
 
@@ -416,6 +434,34 @@ def main():
         if images and "![" not in md:
             print("⚠️  模型没插入任何配图，建议重跑或手动插图")
 
+        # 标题是完读率的第一道门：模型经常写超长，超了就按「小故事 + 项目」重写一次。
+        title = md.splitlines()[0].lstrip("# ").strip() if md else ""
+        if not (40 <= len(title) <= 50):
+            best = title
+            for attempt in range(2):
+                try:
+                    fixed = ga.chat([
+                        {"role": "system", "content": "你是公众号标题编辑，只输出一行标题，不要解释、不要引号。"},
+                        {"role": "user", "content": (
+                            f"把原标题改写成「小故事 + 项目」两段式，总长度必须落在 40 到 50 个字符之间"
+                            f"（含标点，45 字上下）。逗号可以用多个，尽量不用冒号，动词要具体。\n"
+                            f"原标题：{title}\n项目：{full_name}\n只输出改写后的标题，不要引号。")}
+                    ]).strip().splitlines()[0].strip().strip('"“”')
+                except Exception as e:
+                    print(f"标题重写失败（第 {attempt + 1} 次）: {e}")
+                    continue
+                if 40 <= len(fixed) <= 50:
+                    best = fixed
+                    break
+                if abs(len(fixed) - 45) < abs(len(best) - 45):
+                    best = fixed
+            if best and best != title:
+                body = md.splitlines()
+                body[0] = "# " + best
+                md = "\n".join(body)
+                print(f"标题重写: {len(best)} 字 ← {title}")
+            else:
+                print(f"⚠️  标题 {len(title)} 字，未落在 40–50 区间，保留原题")
         out = args.out or os.path.join(OUT_DIR,
                                        f"{datetime.now(timezone.utc).date().isoformat()}-{slug}.md")
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

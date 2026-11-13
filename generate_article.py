@@ -32,6 +32,10 @@ import netutil
 
 BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com/v1")
 MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+# 单次输出上限：DeepSeek 默认 4096，长 JSON 会被截断，这里放到 8000（其上限 8192）
+MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS") or 8000)
+# 上下文窗口：只决定一次请求能塞多少输入（默认按 1M 配），不等于输出上限
+CONTEXT_TOKENS = int(os.environ.get("LLM_CONTEXT_TOKENS") or 1000000)
 
 SYSTEM = "你是公众号「逛逛GitHub」的编辑，专门把 GitHub 新项目写成通俗易懂的中文介绍。"
 
@@ -79,7 +83,8 @@ def chat(messages, key=None, temperature=0.7):
     if not key:
         sys.exit("缺少环境变量 LLM_API_KEY (或 DEEPSEEK_API_KEY)")
     payload = json.dumps({"model": MODEL, "messages": messages,
-                          "temperature": temperature}).encode("utf-8")
+                          "temperature": temperature,
+                          "max_tokens": MAX_TOKENS}).encode("utf-8")
     req = urllib.request.Request(f"{BASE_URL}/chat/completions", data=payload, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", f"Bearer {key}")
@@ -105,14 +110,97 @@ def build_instruction(focus):
     return INSTRUCTION.format(focus=focus, focus_plus=focus + 1)
 
 
-def call_llm(key, items, focus=3):
+def call_llm(key, items, focus=3, extra=""):
     slim = [{"index": it["index"], "role": it.get("role", "detail"),
              "full_name": it["full_name"], "description": it.get("description", ""),
              "stars": it.get("stars"), "delta": it.get("delta"),
              "language": it.get("language", "")} for it in items]
-    prompt = build_instruction(focus) + load_style() + json.dumps(slim, ensure_ascii=False)
+    prompt = build_instruction(focus) + load_style() + json.dumps(slim, ensure_ascii=False) + (extra or "")
     return chat([{"role": "system", "content": SYSTEM},
                  {"role": "user", "content": prompt}], key)
+
+
+IN_TOKENS_PER_ITEM = 150        # 每项喂给模型的元数据，粗估
+OUT_TOKENS_PER_DETAIL = 600     # 详写一项的输出，粗估
+OUT_TOKENS_PER_BRIEF = 150      # 简报一项的输出，粗估
+
+
+def plan_batches(items):
+    """按「输出上限」和「上下文窗口」一起排批。
+
+    输出超上限会被截断（整篇文章作废），输入超上下文会被接口拒绝，
+    两个预算哪个先到就在哪里断开。
+    """
+    out_budget = max(1200, int(MAX_TOKENS * 0.85))
+    in_budget = max(4000, CONTEXT_TOKENS - MAX_TOKENS - 2000)
+    chunks, cur, out_acc, in_acc = [], [], 0, 0
+    for it in items:
+        cost_out = OUT_TOKENS_PER_DETAIL if it.get("role") != "brief" else OUT_TOKENS_PER_BRIEF
+        if cur and (out_acc + cost_out > out_budget or in_acc + IN_TOKENS_PER_ITEM > in_budget):
+            chunks.append(cur)
+            cur, out_acc, in_acc = [], 0, 0
+        cur.append(it)
+        out_acc += cost_out
+        in_acc += IN_TOKENS_PER_ITEM
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def call_llm_batched(key, items, focus=3):
+    """一批写得完就只调一次（行为同原来），写不完就分批再合并。"""
+    chunks = plan_batches(items)
+    if len(chunks) == 1:
+        return parse_payload(call_llm(key, items, focus))
+
+    print("输出预算紧张，分 %d 批生成（每批 <=%d 项）"
+          % (len(chunks), max(len(c) for c in chunks)))
+    hook = takeaway = ""
+    merged = {}
+    for idx, chunk in enumerate(chunks):
+        extra = "" if idx == 0 else (
+            "\n\n[分批说明]这是第 %d/%d 批，只写 items 里列出的这几项；"
+            "hook 和 takeaway 一律返回空字符串。" % (idx + 1, len(chunks)))
+        h, t, raw = parse_payload(call_llm(key, chunk, focus, extra))
+        if idx == 0:
+            hook, takeaway = h, t
+        for c in raw:
+            if c.get("full_name"):
+                merged[c["full_name"]] = c
+        print("  - 第 %d/%d 批完成，累计 %d 项" % (idx + 1, len(chunks), len(merged)))
+    return hook, takeaway, list(merged.values())
+
+
+def repair_truncated(text):
+    """max_tokens 截断时救回已完整的部分：从后往前找可闭合的切点，补上缺的括号。"""
+    stack, in_str, esc = [], False, False
+    cuts = []
+    for idx, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+                if stack:               # 字符串收尾也算一个可切点（截断常发生在数组元素中间）
+                    cuts.append((idx, "".join(reversed(stack))))
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            if stack:
+                cuts.append((idx, "".join(reversed(stack))))
+    for idx, closer in reversed(cuts[-300:]):
+        try:
+            return json.loads(text[:idx + 1] + closer)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def parse_json_array(text):
@@ -194,6 +282,12 @@ def parse_payload(text):
                 return (str(data.get("hook") or "").strip(),
                         str(data.get("takeaway") or "").strip(),
                         normalize_items(data["items"]))
+    fixed = repair_truncated(text[i:j + 1] if 0 <= i < j else text)
+    if isinstance(fixed, dict) and fixed.get("items"):
+        print("提示: 模型输出被截断，已按已完整的部分修复", file=sys.stderr)
+        return (str(fixed.get("hook") or "").strip(),
+                str(fixed.get("takeaway") or "").strip(),
+                normalize_items(fixed["items"]))
     return "", "", parse_json_array(text)      # 退回旧格式：只有数组，没有开头和结论
 
 
@@ -320,7 +414,7 @@ def main():
         key = (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
         if not key:
             sys.exit("缺少环境变量 LLM_API_KEY (或 DEEPSEEK_API_KEY)")
-        hook, takeaway, raw = parse_payload(call_llm(key, items, args.focus))
+        hook, takeaway, raw = call_llm_batched(key, items, args.focus)
         copies = build_copies(raw, items)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
